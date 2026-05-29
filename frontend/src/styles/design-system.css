@@ -1,0 +1,159 @@
+/* ============================================================
+   AxCob — Sistema visual
+   Base branca · Outfit · Verde de fundo #0E9F6E
+   Accent da marca (logo) #00FD54 — usado só nos "detalheszinhos"
+   Escala de cores por aging (dias vencidos)
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* ---- Marca / verde (rampa de fundo, contraste seguro) ---- */
+  --green-50:  #E6F6EF;
+  --green-100: #C5ECDC;
+  --green-200: #8FDCBF;
+  --green-300: #4FC79C;
+  --green-400: #1FB07F;
+  --green-500: #0E9F6E;   /* verde de fundo principal */
+  --green-600: #0B8A5F;
+  --green-700: #08714E;
+  --green-800: #07593E;
+  --green-900: #053F2C;
+
+  /* ---- Accent da marca AxCob (logo) — só detalhes ---- */
+  --accent:        #00FD54;   /* verde neon da logo */
+  --accent-soft:   rgba(0, 253, 84, 0.14);
+  --accent-ring:   rgba(0, 253, 84, 0.45);
+  --accent-ink:    #053F2C;   /* texto legível sobre o accent */
+
+  /* ---- Neutros (sistema branco) ---- */
+  --white:   #FFFFFF;
+  --paper:   #FBFCFB;   /* fundo de página */
+  --surface: #FFFFFF;   /* cards */
+  --ink-900: #10231B;   /* texto principal (verde-tinted dark) */
+  --ink-700: #354A41;
+  --ink-500: #5C7068;
+  --ink-400: #7E908A;
+  --ink-300: #A6B3AE;
+  --line:    #E7ECE9;   /* bordas */
+  --line-soft:#F0F3F1;
+  --hover:   #F5F8F6;
+
+  /* ---- Aging (dias vencidos) ---- */
+  --age-fresh-bg: #E6F6EF; --age-fresh-fg: #0B8A5F;  /* 1–30 */
+  --age-warn-bg:  #FEF3DC; --age-warn-fg:  #B7791F;  /* 31–60 */
+  --age-hot-bg:   #FDE6D9; --age-hot-fg:   #C2410C;  /* 61–90 */
+  --age-crit-bg:  #FCE2E2; --age-crit-fg:  #B91C1C;  /* 90+ */
+
+  /* ---- Status ---- */
+  --st-open-bg:#EEF2F0; --st-open-fg:#54655D;
+  --st-nego-bg:#E4EEFB; --st-nego-fg:#1D5FB8;
+  --st-acordo-bg:#E6F6EF; --st-acordo-fg:#0B8A5F;
+  --st-prot-bg:#F3E8FB; --st-prot-fg:#7C3AED;
+
+  /* ---- Sombra / raio ---- */
+  --sh-sm: 0 1px 2px rgba(16,35,27,.05);
+  --sh-md: 0 2px 8px rgba(16,35,27,.06), 0 1px 2px rgba(16,35,27,.04);
+  --sh-lg: 0 12px 32px rgba(16,35,27,.10), 0 2px 8px rgba(16,35,27,.05);
+  --r-sm: 7px;
+  --r-md: 11px;
+  --r-lg: 16px;
+
+  --font: 'Outfit', system-ui, -apple-system, sans-serif;
+
+  /* ---- App shell ---- */
+  --sidebar-w: 224px;
+  --sidebar-w-collapsed: 72px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  font-family: var(--font);
+  color: var(--ink-900);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+/* foco acessível com o accent da marca */
+:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+}
+
+/* numerais tabulares para colunas de valores */
+.tnum { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+/* ---- Chips de status ---- */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; line-height: 1.4;
+  letter-spacing: .01em; white-space: nowrap;
+}
+.chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .85; }
+.chip.open       { background: var(--st-open-bg); color: var(--st-open-fg); }
+.chip.nego       { background: var(--st-nego-bg); color: var(--st-nego-fg); }
+.chip.acordo     { background: var(--st-acordo-bg); color: var(--st-acordo-fg); }
+.chip.protesto   { background: #EDE9FE; color: #6D28D9; }
+.chip.protestado { background: var(--st-prot-bg); color: var(--st-prot-fg); }
+.chip.negativado { background: var(--age-crit-bg); color: var(--age-crit-fg); }
+
+/* ---- Pílula de aging ---- */
+.age {
+  display: inline-flex; align-items: baseline; gap: 3px;
+  padding: 3px 9px; border-radius: var(--r-sm);
+  font-weight: 700; font-size: 13px; line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.age .u { font-size: 10px; font-weight: 600; opacity: .75; }
+.age.fresh { background: var(--age-fresh-bg); color: var(--age-fresh-fg); }
+.age.warn  { background: var(--age-warn-bg);  color: var(--age-warn-fg); }
+.age.hot   { background: var(--age-hot-bg);   color: var(--age-hot-fg); }
+.age.crit  { background: var(--age-crit-bg);  color: var(--age-crit-fg); }
+
+/* ---- Botões ---- */
+.btn {
+  font-family: var(--font); font-weight: 600; font-size: 13px;
+  border-radius: var(--r-sm); border: 1px solid transparent;
+  padding: 8px 14px; cursor: pointer; display: inline-flex;
+  align-items: center; gap: 7px; line-height: 1; transition: all .14s ease;
+  white-space: nowrap;
+}
+.btn:active { transform: translateY(.5px); }
+.btn-primary { background: var(--green-500); color: #fff; box-shadow: var(--sh-sm); }
+.btn-primary:hover { background: var(--green-600); }
+.btn-ghost { background: var(--white); color: var(--ink-700); border-color: var(--line); }
+.btn-ghost:hover { background: var(--hover); border-color: var(--ink-300); }
+.btn-quiet { background: transparent; color: var(--ink-500); padding: 7px 9px; }
+.btn-quiet:hover { background: var(--hover); color: var(--ink-900); }
+.btn-sm { padding: 6px 10px; font-size: 12px; }
+
+/* ---- Inputs / filtros ---- */
+.field {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 12px; background: var(--white);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  font-family: var(--font); font-size: 13px; font-weight: 500;
+  color: var(--ink-700); cursor: pointer; transition: all .14s ease;
+}
+.field:hover { border-color: var(--ink-300); }
+.field.active { border-color: var(--green-400); background: var(--green-50); color: var(--green-700); }
+.field .ph { color: var(--ink-400); font-weight: 500; }
+.field .cv { color: var(--ink-300); }
+
+/* ---- Scrollbar enxuta ---- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #d6ddd9; border-radius: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- Util ---- */
+.mono-id { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.divider { height: 1px; background: var(--line); }
+
+button { font-family: var(--font); }
+input { font-family: var(--font); }

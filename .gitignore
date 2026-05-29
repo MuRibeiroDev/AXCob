@@ -1,0 +1,43 @@
+# ───────────────────────── AxCob ─────────────────────────
+
+# Segredos — NUNCA versionar (DB, senha, webhook do Bitrix)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Dependências
+node_modules/
+**/node_modules/
+
+# Builds / saídas
+dist/
+build/
+**/dist/
+**/build/
+.vite/
+
+# Python (scripts de análise)
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+.python-version
+
+# Logs e temporários
+*.log
+npm-debug.log*
+*.local
+.cache/
+
+# Claude Code (config local da máquina)
+.claude/settings.local.json
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
