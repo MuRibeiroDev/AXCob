@@ -1,13 +1,13 @@
 # Deploy do AxCob (Docker)
 
-Sobe a stack completa atrás de um proxy nginx na porta **2555**:
+Sobe a stack na porta **2555** (frontend nginx serve o SPA e proxia `/api`):
 
 ```
-[browser] →:2555→ [proxy nginx] ─/────→ [frontend SPA]
-                       └─/api──→ [backend NestJS] ──HTTP /run──→ [worker Playwright]
-                                      │                                 │
-                                 axcob-data                       axcob-session
-                                 (SQLite)                         (sessão Power BI)
+[browser] →:2555→ [frontend nginx]  ─/────→ SPA estático
+                        └─/api──────→ [backend NestJS] ──HTTP /run──→ [worker Playwright]
+                                           │                                 │
+                                      axcob-data                       axcob-session
+                                      (SQLite)                         (sessão Power BI)
 ```
 
 ## Pré-requisitos no servidor
@@ -44,8 +44,7 @@ nunca por git/e-mail/chat.
 docker compose up -d --build
 ```
 
-O compose só dá "up" do proxy depois que backend, frontend e worker ficam **healthy**.
-Acesse: `http://<servidor>:2555`
+O frontend só sobe depois que o backend fica **healthy**. Acesse: `http://<servidor>:2555`
 
 ## 4. Power BI (relatórios)
 
@@ -61,7 +60,7 @@ relatório. Conta sem MFA.
 ## Comandos úteis
 
 ```bash
-docker compose logs -f proxy      # tráfego do proxy
+docker compose logs -f frontend   # SPA + proxy /api (entrada na 2555)
 docker compose logs -f backend    # API NestJS
 docker compose logs -f worker     # geração de PNG / login Power BI
 docker compose ps                 # status + health

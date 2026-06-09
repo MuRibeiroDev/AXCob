@@ -81,44 +81,22 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_URL: /api      # mesma origem do proxy -> nginx roteia p/ o backend
+        VITE_API_URL: /api      # mesma origem -> o nginx do front encaminha /api p/ o backend
     image: axcob-frontend:latest
     container_name: axcob-frontend
     restart: unless-stopped
-    expose:
-      - "80"                    # estático servido por nginx, só na rede interna
-    networks:
-      - axcob-net
-    logging: *default-logging
-    deploy:
-      resources:
-        limits:
-          cpus: "0.25"          # nginx servindo estático: footprint mínimo
-          memory: 128M
-        reservations:
-          cpus: "0.05"
-          memory: 32M
-
-  proxy:
-    image: nginx:1.27-alpine
-    container_name: axcob-proxy
-    restart: unless-stopped
     ports:
-      - "2555:80"               # ÚNICA porta publicada — entrada de todo o tráfego
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - "2555:80"               # ÚNICA porta publicada — serve o SPA e proxia /api
     depends_on:
       backend:
         condition: service_healthy
-      frontend:
-        condition: service_healthy
     networks:
       - axcob-net
     logging: *default-logging
     deploy:
       resources:
         limits:
-          cpus: "0.25"
+          cpus: "0.25"          # nginx servindo estático + proxy leve
           memory: 128M
         reservations:
           cpus: "0.05"
