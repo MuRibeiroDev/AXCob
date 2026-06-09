@@ -128,6 +128,19 @@ export class BitrixService {
     return this.analistasConfig().find((a) => a.id === String(id))?.webhook ?? null;
   }
 
+  /** Quem é o dono de um webhook (user.current) — p/ confirmar de quem é o webhook colado. */
+  async usuarioDoWebhook(webhook: string): Promise<{ id: number; nome: string } | null> {
+    try {
+      const res = await this.post('user.current', {}, webhook);
+      const u = res?.result;
+      if (!u) return null;
+      const nome = [u.NAME, u.LAST_NAME].filter(Boolean).join(' ').trim() || u.EMAIL || `#${u.ID}`;
+      return { id: Number(u.ID), nome };
+    } catch {
+      return null;
+    }
+  }
+
   private join(v: unknown): string | null {
     if (Array.isArray(v)) return v.length ? v.map((x) => String(x)).join(', ') : null;
     return v != null && v !== '' ? String(v) : null;
@@ -449,6 +462,8 @@ export class BitrixService {
       ufCrm58_1759923007: sacado ? [sacado] : [],                     // Razão Sacado (múltiplo)
       ufCrm58_1759923144: item.cnpjSacado ? [item.cnpjSacado] : [],   // CNPJ Sacado (múltiplo)
     };
+    // Razão social/Nome do Cedente (campo único, não-múltiplo)
+    if (item.razaoCedente) fields[BITRIX_FIELDS.razaoCedente] = item.razaoCedente;
     // Plataforma: protesto usa Plataforma-Cedente; negativação usa Plataforma-Sacado
     if (pipeline === 'protesto') fields.ufCrm58_1759253476 = BitrixService.PLAT_CEDENTE[plat];
     else fields.ufCrm58_1759926553 = BitrixService.PLAT_SACADO[plat];
@@ -471,13 +486,15 @@ export class BitrixService {
   }
 
   /** Cria várias solicitações; invalida o cache de status ao final.
-   *  `analistaId` → usa o webhook próprio do analista p/ gravar o "Criado por". */
+   *  `webhookOverride` (webhook do próprio usuário logado) tem prioridade; senão
+   *  cai pro webhook do analista (`analistaId`) e, por fim, pro padrão. */
   async criarSolicitacoes(
     pipeline: 'protesto' | 'negativacao',
     itens: SolicitacaoItem[],
     analistaId?: number | string | null,
+    webhookOverride?: string | null,
   ): Promise<CriacaoResultado[]> {
-    const webhook = this.webhookDoAnalista(analistaId);
+    const webhook = (webhookOverride && webhookOverride.trim()) || this.webhookDoAnalista(analistaId);
     const resultados: CriacaoResultado[] = [];
     for (const item of itens) {
       resultados.push(await this.criarSolicitacao(pipeline, item, { webhook }));
@@ -492,6 +509,7 @@ export interface SolicitacaoItem {
   valor: number | null;
   cnpjSacado: string | null;
   razaoSacado: string | null;
+  razaoCedente?: string | null; // Razão social/Nome do Cedente (ufCrm58_1759253307)
   sistema: string | null; // define a Plataforma (SEC/FIDC/LION)
   prioridade?: 'PADRAO' | 'URGENTE';
 }

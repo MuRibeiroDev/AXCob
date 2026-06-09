@@ -7,6 +7,8 @@ import { AcoesModule } from './acoes/acoes.module';
 import { KanbanModule } from './kanban/kanban.module';
 import { RelatoriosModule } from './relatorios/relatorios.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { AuthModule } from './auth/auth.module';
+import { UserConfigModule } from './user-config/user-config.module';
 
 @Module({
   imports: [
@@ -15,6 +17,8 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
       // backend/.env primeiro; cai pro .env da raiz do projeto se faltar algo
       envFilePath: ['.env', '../.env'],
     }),
+    AuthModule,
+    UserConfigModule,
     DatabaseModule,
     BitrixModule,
     TitulosVencidosModule,

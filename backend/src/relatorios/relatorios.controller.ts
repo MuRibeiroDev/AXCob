@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Res } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Param, Post, Query, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import { RelatoriosService } from './relatorios.service';
 
@@ -36,10 +36,15 @@ export class RelatoriosController {
     return this.service.gerarTexto(id);
   }
 
-  /** Envia todos os relatórios (na ordem fixa) por WhatsApp p/ 1+ números. */
+  /** Envia todos os relatórios (na ordem fixa) por WhatsApp para o telefone do
+   *  PRÓPRIO usuário logado (cadastrado na users_qitech). */
   @Post('enviar-sequencia')
-  enviarSequencia(@Body() body: { numeros?: string[] }) {
-    return this.service.enviarSequencia(Array.isArray(body?.numeros) ? body.numeros : []);
+  enviarSequencia(@Req() req: any) {
+    const phone = (req.user?.phone ?? '').toString().replace(/\D/g, '');
+    if (!phone) {
+      throw new BadRequestException('Seu usuário não tem telefone (WhatsApp) cadastrado.');
+    }
+    return this.service.enviarSequencia([phone]);
   }
 
   /** Dispara a geração de um relatório PNG (Power BI). Assíncrono. */

@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '@/components/Icon';
 import { api, type RelatorioCard, type RelatorioPngStatus } from '@/lib/api';
+import { getUser } from '@/lib/auth';
 
 interface Modal { id: string; label: string; texto: string }
 interface ImgModal { id: string; label: string; imagens: string[]; at?: string }
@@ -20,10 +21,11 @@ export function RelatoriosPage() {
   const [pngState, setPngState] = useState<Record<string, RelatorioPngStatus>>({});
   const [imgModal, setImgModal] = useState<ImgModal | null>(null);
   const pollRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  // envio em sequência por WhatsApp (gera os PNGs → espera → envia tudo na ordem)
-  const [numeroEnvio, setNumeroEnvio] = useState('');
+  // envio em sequência por WhatsApp (gera os PNGs → espera → envia p/ o telefone do usuário)
   const [fluxoEnvio, setFluxoEnvio] = useState<'idle' | 'gerando' | 'enviando'>('idle');
   const [envioMsg, setEnvioMsg] = useState<{ ok: boolean; msg: string } | null>(null);
+  const telefoneUsuario = (getUser()?.phone ?? '').replace(/\D/g, '');
+  const telefoneMasc = telefoneUsuario ? telefoneUsuario.replace(/\d(?=\d{4})/g, '•') : '';
 
   useEffect(() => {
     api.relatorios().then(setCards).catch((e) => setError(e.message));
@@ -87,12 +89,9 @@ export function RelatoriosPage() {
     });
   };
 
-  // números no mesmo formato do envio de comissárias: 55DDD…, separados por vírgula
-  const numerosEnvio = () => numeroEnvio.split(',').map((n) => n.replace(/\D/g, '')).filter(Boolean);
-
-  // "Enviar relatórios": gera todos os PNGs e, quando prontos, envia tudo na ordem
+  // "Enviar relatórios": gera todos os PNGs e, quando prontos, envia p/ o WhatsApp do usuário logado
   const enviarRelatorios = () => {
-    if (numerosEnvio().length === 0) { setEnvioMsg({ ok: false, msg: 'Informe ao menos um número (55DDD…).' }); return; }
+    if (!telefoneUsuario) { setEnvioMsg({ ok: false, msg: 'Seu usuário não tem WhatsApp cadastrado.' }); return; }
     setEnvioMsg(null);
     setFluxoEnvio('gerando');
     (cards ?? []).forEach((c) => {
@@ -111,7 +110,7 @@ export function RelatoriosPage() {
     }
     if (pngCards.length > 0 && sts.every((s) => s === 'pronto')) {
       setFluxoEnvio('enviando');
-      api.enviarSequenciaRelatorios(numerosEnvio())
+      api.enviarSequenciaRelatorios()
         .then((r) => {
           const falhas = r.passos.filter((p) => !p.ok);
           setEnvioMsg(falhas.length === 0
@@ -189,21 +188,16 @@ export function RelatoriosPage() {
             {gerandoQtd > 0 ? `Gerando ${gerandoQtd}…` : 'Gerar todos (PNG)'}
           </button>
         )}
-        {/* envio em sequência por WhatsApp */}
-        <div className="field" style={{ width: 280, cursor: 'text' }}>
-          <Icon name="whats" size={15} style={{ color: 'var(--green-600)' }} />
-          <input
-            value={numeroEnvio}
-            onChange={(e) => setNumeroEnvio(e.target.value)}
-            placeholder="Número(s) WhatsApp — 55DDDxxxxxxxx (separe por vírgula)"
-            disabled={fluxoEnvio !== 'idle'}
-            style={{ border: 'none', outline: 'none', background: 'transparent', font: 'inherit', fontSize: 13, flex: 1, minWidth: 0, color: 'var(--ink-900)' }}
-            onKeyDown={(e) => e.key === 'Enter' && fluxoEnvio === 'idle' && enviarRelatorios()}
-          />
-        </div>
-        <button className="btn btn-primary btn-sm" onClick={enviarRelatorios} disabled={fluxoEnvio !== 'idle'} title="Gera todos os relatórios e envia na ordem por WhatsApp">
+        {/* envio em sequência por WhatsApp — para o número do PRÓPRIO usuário logado */}
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={enviarRelatorios}
+          disabled={fluxoEnvio !== 'idle' || !telefoneUsuario}
+          title={telefoneUsuario ? `Gera todos os relatórios e envia pro seu WhatsApp (${telefoneMasc})` : 'Seu usuário não tem WhatsApp cadastrado'}
+        >
           <Icon name={fluxoEnvio !== 'idle' ? 'history' : 'whats'} size={14} className={fluxoEnvio !== 'idle' ? 'spin' : undefined} />
-          {fluxoEnvio === 'gerando' ? 'Gerando…' : fluxoEnvio === 'enviando' ? 'Enviando…' : 'Enviar relatórios'}
+          {fluxoEnvio === 'gerando' ? 'Gerando…' : fluxoEnvio === 'enviando' ? 'Enviando…'
+            : telefoneUsuario ? `Enviar pro meu WhatsApp (${telefoneMasc})` : 'Sem WhatsApp cadastrado'}
         </button>
       </div>
 
@@ -353,20 +347,20 @@ function ImageModal({ modal, onClose }: { modal: ImgModal; onClose: () => void }
 function ResultModal({ modal, copiado, onCopiar, onAtualizar, atualizando, onClose }: {
   modal: Modal; copiado: boolean; onCopiar: () => void; onAtualizar: () => void; atualizando: boolean; onClose: () => void;
 }) {
-  const [numero, setNumero] = useState('');
   const [enviando, setEnviando] = useState(false);
   const [feedback, setFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const telefone = (getUser()?.phone ?? '').replace(/\D/g, '');
+  const telefoneMasc = telefone ? telefone.replace(/\d(?=\d{4})/g, '•') : '';
 
   const enviar = () => {
-    const numbers = numero.split(',').map((n) => n.trim()).filter(Boolean);
-    if (numbers.length === 0) { setFeedback({ ok: false, msg: 'Informe um número (55DDD…).' }); return; }
+    if (!telefone) { setFeedback({ ok: false, msg: 'Seu usuário não tem WhatsApp cadastrado.' }); return; }
     setEnviando(true);
     setFeedback(null);
-    api.enviarWhatsapp(numbers, modal.texto)
+    api.enviarWhatsapp([telefone], modal.texto)
       .then((r) => setFeedback(
         r.falhas === 0
-          ? { ok: true, msg: `Enviado para ${r.ok} número(s).` }
-          : { ok: false, msg: `${r.ok}/${r.total} enviados. ${r.resultados.find((x) => !x.ok)?.erro ?? ''}` },
+          ? { ok: true, msg: 'Enviado pro seu WhatsApp.' }
+          : { ok: false, msg: r.resultados.find((x) => !x.ok)?.erro ?? 'Falha no envio.' },
       ))
       .catch((e) => setFeedback({ ok: false, msg: e.message }))
       .finally(() => setEnviando(false));
@@ -406,20 +400,11 @@ function ResultModal({ modal, copiado, onCopiar, onAtualizar, atualizando, onClo
               <Icon name="check" size={14} />{copiado ? 'Copiado!' : 'Copiar'}
             </button>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div className="field" style={{ flex: 1, cursor: 'text' }}>
-              <Icon name="whats" size={15} style={{ color: 'var(--green-600)' }} />
-              <input
-                value={numero}
-                onChange={(e) => setNumero(e.target.value)}
-                placeholder="Número(s) WhatsApp — 55DDDxxxxxxxx (separe por vírgula)"
-                style={{ border: 'none', outline: 'none', background: 'transparent', font: 'inherit', fontSize: 13, flex: 1, minWidth: 0, color: 'var(--ink-900)' }}
-                onKeyDown={(e) => e.key === 'Enter' && enviar()}
-              />
-            </div>
-            <button className="btn btn-primary btn-sm" onClick={enviar} disabled={enviando}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-primary btn-sm" onClick={enviar} disabled={enviando || !telefone}
+              title={telefone ? `Enviar pro seu WhatsApp (${telefoneMasc})` : 'Seu usuário não tem WhatsApp cadastrado'}>
               <Icon name={enviando ? 'history' : 'whats'} size={14} className={enviando ? 'spin' : undefined} />
-              {enviando ? 'Enviando…' : 'Enviar'}
+              {enviando ? 'Enviando…' : telefone ? `Enviar pro meu WhatsApp (${telefoneMasc})` : 'Sem WhatsApp cadastrado'}
             </button>
           </div>
           {feedback && (

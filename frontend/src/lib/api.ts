@@ -1,13 +1,25 @@
 /* Cliente HTTP da API do AxCob. */
 import type { CarteiraData, TipoBoleto } from './types';
+import { getToken, clearAuth, type SessaoUser } from './auth';
 
 // Sem VITE_API_URL, usa o MESMO host que serve o frontend (ex.: 192.168.1.25) na porta 3000.
 const BASE =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ??
   `http://${window.location.hostname}:3000/api`;
 
+export const API_BASE = BASE;
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { credentials: 'omit', ...init });
+  const token = getToken();
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${BASE}${path}`, { credentials: 'omit', ...init, headers });
+  if (res.status === 401) {
+    // sessão expirada/ausente → volta pra tela de login
+    clearAuth();
+    window.dispatchEvent(new Event('axcob:unauthorized'));
+    throw new Error('Sessão expirada. Faça login novamente.');
+  }
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
@@ -29,6 +41,7 @@ export interface SolicitacaoItem {
   valor: number | null;
   cnpjSacado: string | null;
   razaoSacado: string | null;
+  razaoCedente?: string | null;
   sistema: string | null;
   prioridade?: 'PADRAO' | 'URGENTE';
 }
@@ -41,10 +54,17 @@ export interface CriacaoResumo {
 }
 
 export const api = {
+  login: (login: string, senha: string) =>
+    post<{ token: string; user: SessaoUser }>('/auth/login', { login, senha }),
   responsaveis: () => req<string[]>('/titulos-vencidos/responsaveis'),
   carteira: (responsavel: string, tipoBoleto: TipoBoleto = 'C') =>
     req<CarteiraData>(`/titulos-vencidos?responsavel=${encodeURIComponent(responsavel)}&tipoBoleto=${tipoBoleto}`),
   analistas: () => req<{ id: string; nome: string }[]>('/acoes/analistas'),
+  minhaConfig: () => req<ConfigUsuario>('/config'),
+  salvarBitrixWebhook: (webhook: string) =>
+    req<ConfigUsuario>('/config/bitrix-webhook', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ webhook }),
+    }),
   protestar: (itens: SolicitacaoItem[], analistaId?: string | number) =>
     post<CriacaoResumo>('/acoes/protestos', { itens, analistaId }),
   negativar: (itens: SolicitacaoItem[], analistaId?: string | number) =>
@@ -58,8 +78,8 @@ export const api = {
   identificarPix: (titulo: string, opts?: { cardId?: string | number; doc?: string; refresh?: boolean }) =>
     post<ConciliacaoResultado>('/kanban/pix/identificar', { titulo, ...opts }),
   listConciliacoesPix: () => req<ConciliacaoSalva[]>('/kanban/pix/conciliacoes'),
-  enviarSequenciaRelatorios: (numeros: string[]) =>
-    post<{ ok: boolean; passos: { passo: string; ok: boolean; erro?: string }[]; faltando: string[] }>('/relatorios/enviar-sequencia', { numeros }),
+  enviarSequenciaRelatorios: () =>
+    post<{ ok: boolean; passos: { passo: string; ok: boolean; erro?: string }[]; faltando: string[] }>('/relatorios/enviar-sequencia', {}),
   agingCarteira: () => req<AgingData>('/relatorios/aging'),
   recebimentos: () => req<{ meses: { mes: string; liquidado: number; qtd: number }[] }>('/relatorios/recebimentos'),
   exposicaoUf: () => req<{ ufs: { uf: string; valor: number; qtd: number }[]; total: number }>('/relatorios/exposicao-uf'),
@@ -71,7 +91,9 @@ export const api = {
   statusRelatorioPng: (id: string) =>
     req<RelatorioPngStatus>(`/relatorios/${encodeURIComponent(id)}/status-png`),
   imagemRelatorioUrl: (id: string, parte: string | number, opts?: { download?: boolean; v?: string }) => {
-    const qs = [opts?.download ? 'download=1' : '', opts?.v ? `v=${encodeURIComponent(opts.v)}` : '']
+    // <img>/download não enviam header → token vai na query (?access_token=)
+    const tk = getToken();
+    const qs = [opts?.download ? 'download=1' : '', opts?.v ? `v=${encodeURIComponent(opts.v)}` : '', tk ? `access_token=${encodeURIComponent(tk)}` : '']
       .filter(Boolean).join('&');
     return `${BASE}/relatorios/imagem/${encodeURIComponent(id)}/${encodeURIComponent(String(parte))}${qs ? `?${qs}` : ''}`;
   },
@@ -81,6 +103,11 @@ export const api = {
       { numbers, texto },
     ),
 };
+
+export interface ConfigUsuario {
+  bitrixWebhook: string | null;
+  bitrixNome: string | null; // de quem é o webhook (confirmado via user.current)
+}
 
 export interface RelatorioCard {
   id: string;

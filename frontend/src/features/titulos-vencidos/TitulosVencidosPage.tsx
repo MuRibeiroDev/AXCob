@@ -21,9 +21,8 @@ function CenterMsg({ children, tone }: { children: ReactNode; tone?: 'error' }) 
   );
 }
 
-// carteira e solicitante persistem entre visitas à aba (localStorage)
+// carteira persiste entre visitas à aba (localStorage)
 const CARTEIRA_KEY = 'axcob.titulos-vencidos.carteira';
-const SOLICITANTE_KEY = 'axcob.titulos-vencidos.solicitante';
 
 export function TitulosVencidosPage() {
   const [responsaveis, setResponsaveis] = useState<string[]>([]);
@@ -32,14 +31,10 @@ export function TitulosVencidosPage() {
   });
   const [tipoBoleto, setTipoBoleto] = useState<TipoBoleto>('C'); // filtro Tipo de Boleto (coluna M)
 
-  // analistas (com webhook próprio) e o último escolhido (default do modal)
-  const [usuarios, setUsuarios] = useState<{ id: string; nome: string }[]>([]);
-  const [solicitante, setSolicitante] = useState<string>(() => {
-    try { return localStorage.getItem(SOLICITANTE_KEY) || ''; } catch { return ''; }
-  });
-  // modal de solicitação (protestar/negativar) — escolha do analista no clique
+  // webhook do próprio usuário (Configurações) → "Criado por" sai com o nome dele
+  const [criadoComo, setCriadoComo] = useState<string | null>(null);
+  // modal de solicitação (protestar/negativar)
   const [pendente, setPendente] = useState<{ acao: AcaoTitulo; sacado: Sacado; titulos: Titulo[]; prioridade: Prioridade } | null>(null);
-  const [analistaSel, setAnalistaSel] = useState<string>('');
   const [criando, setCriando] = useState(false);
 
   const [data, setData] = useState<CarteiraData | null>(null);
@@ -72,13 +67,10 @@ export function TitulosVencidosPage() {
     try { if (responsavel) localStorage.setItem(CARTEIRA_KEY, responsavel); } catch { /* ignore */ }
   }, [responsavel]);
 
-  // carrega analistas (com webhook próprio) p/ escolher quem abre o card; persiste a escolha
+  // carrega a config do usuário p/ saber se há webhook próprio (e de quem é)
   useEffect(() => {
-    api.analistas().then(setUsuarios).catch(() => undefined);
+    api.minhaConfig().then((c) => setCriadoComo(c.bitrixNome)).catch(() => undefined);
   }, []);
-  useEffect(() => {
-    try { localStorage.setItem(SOLICITANTE_KEY, solicitante); } catch { /* ignore */ }
-  }, [solicitante]);
 
   // trocar de carteira OU de tipo de boleto reseta filtros e linha aberta
   useEffect(() => {
@@ -151,7 +143,6 @@ export function TitulosVencidosPage() {
   // Ao clicar em Protestar/Negativar: abre o modal p/ escolher o analista (quem abre o card).
   const handleAction = (acao: AcaoTitulo, sacado: Sacado, titulos: Titulo[], prioridade: Prioridade) => {
     if (titulos.length === 0 || !cedente) return;
-    setAnalistaSel(solicitante || '');
     setPendente({ acao, sacado, titulos, prioridade });
   };
 
@@ -162,22 +153,24 @@ export function TitulosVencidosPage() {
     const label = acao === 'protestar' ? 'Protestar' : 'Negativar';
     const etapa = acao === 'protestar' ? 'Solicitações de Protesto' : 'Solicitações de Negativação';
     const sacadoLimpo = sacado.nome.replace(/-\s*sacado\s*$/i, '').trim();
+    const cedenteNome = cedente?.nome?.trim() || null;
 
     const itens = titulos.map((t) => ({
       numeroTitulo: t.id,
       valor: t.valorOriginal,
       cnpjSacado: sacado.doc,
       razaoSacado: sacadoLimpo,
+      razaoCedente: cedenteNome,
       sistema: t.sistema,
       prioridade,
     }));
 
     setCriando(true);
     try {
+      // sem analistaId: o backend usa o webhook do próprio usuário logado (Configurações)
       const r = acao === 'protestar'
-        ? await api.protestar(itens, analistaSel || undefined)  // analistaSel = id do analista
-        : await api.negativar(itens, analistaSel || undefined);
-      setSolicitante(analistaSel); // lembra a última escolha como padrão
+        ? await api.protestar(itens)
+        : await api.negativar(itens);
       setPendente(null);
       if (r.falhas > 0) {
         const err = r.resultados.find((x) => !x.ok)?.erro ?? '';
@@ -286,9 +279,7 @@ export function TitulosVencidosPage() {
           qtd={pendente.titulos.length}
           sacado={pendente.sacado.nome.replace(/-\s*sacado\s*$/i, '').trim()}
           prioridade={pendente.prioridade}
-          analistas={usuarios}
-          analistaSel={analistaSel}
-          onAnalista={setAnalistaSel}
+          criadoComo={criadoComo}
           criando={criando}
           onCancelar={() => !criando && setPendente(null)}
           onConfirmar={confirmarSolicitacao}
@@ -298,10 +289,9 @@ export function TitulosVencidosPage() {
   );
 }
 
-function SolicitarModal({ acao, qtd, sacado, prioridade, analistas, analistaSel, onAnalista, criando, onCancelar, onConfirmar }: {
+function SolicitarModal({ acao, qtd, sacado, prioridade, criadoComo, criando, onCancelar, onConfirmar }: {
   acao: AcaoTitulo; qtd: number; sacado: string; prioridade: Prioridade;
-  analistas: { id: string; nome: string }[]; analistaSel: string; onAnalista: (id: string) => void;
-  criando: boolean; onCancelar: () => void; onConfirmar: () => void;
+  criadoComo: string | null; criando: boolean; onCancelar: () => void; onConfirmar: () => void;
 }) {
   const label = acao === 'protestar' ? 'Protestar' : 'Negativar';
   const cor = acao === 'protestar' ? '#6D28D9' : 'var(--age-crit-fg)';
@@ -310,7 +300,7 @@ function SolicitarModal({ acao, qtd, sacado, prioridade, analistas, analistaSel,
       onMouseDown={(e) => { if (e.target === e.currentTarget) onCancelar(); }}
       style={{ position: 'fixed', inset: 0, background: 'rgba(16,35,27,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 80, padding: 24 }}
     >
-      <div className="fade-in" style={{ width: 'min(460px, 100%)', maxHeight: '86vh', background: 'var(--white)', borderRadius: 14, boxShadow: 'var(--sh-lg)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div className="fade-in" style={{ width: 'min(440px, 100%)', maxHeight: '86vh', background: 'var(--white)', borderRadius: 14, boxShadow: 'var(--sh-lg)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '15px 20px', borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
             <Icon name={acao === 'protestar' ? 'gavel' : 'alert'} size={17} style={{ color: cor }} />
@@ -322,38 +312,18 @@ function SolicitarModal({ acao, qtd, sacado, prioridade, analistas, analistaSel,
         </div>
 
         <div style={{ padding: '16px 20px', overflowY: 'auto' }}>
-          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 10 }}>
-            Quem está abrindo o card?
-          </div>
-          {analistas.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: 'var(--ink-500)', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 9, padding: '10px 12px' }}>
-              Nenhum analista configurado — o card será criado pela <b>integração</b>.
+          {criadoComo ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, color: 'var(--ink-700)', background: 'var(--green-50)', border: '1px solid var(--green-100, var(--line))', borderRadius: 9, padding: '11px 12px' }}>
+              <Icon name="check" size={16} style={{ color: 'var(--green-700)', flex: '0 0 auto' }} />
+              <span>Será criado no Bitrix como <b>{criadoComo}</b>.</span>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {[{ id: '', nome: 'Integração (padrão)' }, ...analistas].map((a) => {
-                const on = analistaSel === a.id;
-                return (
-                  <button
-                    key={a.id || '_'}
-                    type="button"
-                    onClick={() => onAnalista(a.id)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
-                      font: 'inherit', fontSize: 13, cursor: 'pointer',
-                      padding: '9px 11px', borderRadius: 9,
-                      border: `1.5px solid ${on ? 'var(--green-500)' : 'var(--line)'}`,
-                      background: on ? 'var(--green-50)' : 'var(--white)',
-                      color: a.id ? 'var(--ink-900)' : 'var(--ink-500)', fontWeight: on ? 700 : 500,
-                    }}
-                  >
-                    <span style={{ width: 16, height: 16, borderRadius: 999, flex: '0 0 auto', border: `1.5px solid ${on ? 'var(--green-500)' : 'var(--ink-300)'}`, background: on ? 'var(--green-500)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {on && <span style={{ width: 6, height: 6, borderRadius: 999, background: '#fff' }} />}
-                    </span>
-                    {a.nome}
-                  </button>
-                );
-              })}
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, fontSize: 12.5, color: 'var(--ink-500)', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 9, padding: '11px 12px' }}>
+              <Icon name="alert" size={16} style={{ color: 'var(--ink-400)', flex: '0 0 auto', marginTop: 1 }} />
+              <span>
+                Você ainda não configurou seu webhook do Bitrix — o card será criado pela
+                <b> integração padrão</b>. Cadastre o seu em <b>Configurações</b> p/ aparecer no seu nome.
+              </span>
             </div>
           )}
         </div>

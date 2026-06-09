@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Icon } from '@/components/Icon';
+import { getUser, logout } from '@/lib/auth';
 
 const logoUrl = '/logo-audax.png';
 
@@ -26,6 +27,8 @@ const HOVER_BG = 'rgba(16,35,27,.035)';
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const user = getUser();
+  const iniciais = (user?.nome || user?.username || '?').split(' ').filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('');
 
   const itemBase = (isActive: boolean): React.CSSProperties => ({
     position: 'relative',
@@ -134,6 +137,28 @@ export function Sidebar() {
           <Icon name="panel" size={16} style={{ flex: '0 0 auto' }} />
           {!collapsed && <span>Recolher</span>}
         </button>
+
+        {/* usuário logado + sair */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 6, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+          <div style={{ width: 30, height: 30, borderRadius: '50%', flex: '0 0 auto', background: 'var(--green-50)', color: 'var(--green-700)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 11.5 }}>
+            {iniciais}
+          </div>
+          {!collapsed && (
+            <div style={{ lineHeight: 1.2, flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-800)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.nome || user?.username || 'Usuário'}</div>
+              <div style={{ fontSize: 10.5, color: 'var(--ink-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.role || ''}</div>
+            </div>
+          )}
+          <button
+            onClick={logout}
+            title="Sair"
+            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-400)', display: 'flex', alignItems: 'center', padding: 6, borderRadius: 8, flex: '0 0 auto' }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--age-crit-fg)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--ink-400)')}
+          >
+            <Icon name="arrowUp" size={16} style={{ transform: 'rotate(90deg)' }} />
+          </button>
+        </div>
       </div>
     </aside>
   );

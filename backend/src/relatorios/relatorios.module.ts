@@ -7,5 +7,6 @@ import { WhatsappModule } from '../whatsapp/whatsapp.module';
   imports: [WhatsappModule],
   controllers: [RelatoriosController],
   providers: [RelatoriosService],
+  exports: [RelatoriosService],
 })
 export class RelatoriosModule {}

@@ -5,5 +5,6 @@ import { TitulosVencidosService } from './titulos-vencidos.service';
 @Module({
   controllers: [TitulosVencidosController],
   providers: [TitulosVencidosService],
+  exports: [TitulosVencidosService],
 })
 export class TitulosVencidosModule {}
