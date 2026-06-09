@@ -12,10 +12,10 @@ export interface KanbanStatusMeta {
 export const KANBAN_STATUS: Record<KanbanStatus, KanbanStatusMeta> = {
   quitado_pronto: {
     label: 'Quitado',
-    dot: 'var(--green-500)',
-    badgeBg: 'var(--green-50)',
-    badgeFg: 'var(--green-700)',
-    border: 'var(--green-400)',
+    dot: 'var(--age-crit-fg)',
+    badgeBg: 'var(--age-crit-bg)',
+    badgeFg: 'var(--age-crit-fg)',
+    border: 'var(--age-crit-fg)',
   },
   quitado_parcial: {
     label: 'Parcial',

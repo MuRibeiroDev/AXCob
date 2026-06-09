@@ -15,16 +15,15 @@ export class TitulosVencidosController {
     return this.service.listarResponsaveis();
   }
 
-  /** Carteira do responsável: cedentes → sacados → títulos vencidos + KPIs. */
+  /** Carteira do responsável: cedentes → sacados → títulos vencidos + KPIs.
+   *  tipoBoleto = filtro do Tipo de Boleto (coluna M): 'C' (padrão) ou 'T'. */
   @Get()
   carteira(
     @Query('responsavel') responsavel: string,
-    @Query('tipo') tipo?: string,
+    @Query('tipoBoleto') tipoBoleto?: string,
   ) {
-    const def = (this.config.get<string>('VENCIDOS_TIPO_DEFAULT') ?? 'comissarias') as
-      | 'comissarias'
-      | 'todos';
-    const t = tipo === 'todos' || tipo === 'comissarias' ? tipo : def;
+    const def = (this.config.get<string>('VENCIDOS_BOLETO_DEFAULT') ?? 'C') as 'todos' | 'C' | 'T';
+    const t = tipoBoleto === 'C' || tipoBoleto === 'T' || tipoBoleto === 'todos' ? tipoBoleto : def;
     return this.service.porResponsavel(responsavel, t);
   }
 }

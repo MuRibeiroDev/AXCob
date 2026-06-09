@@ -3,6 +3,10 @@ import { ConfigModule } from '@nestjs/config';
 import { DatabaseModule } from './database/database.module';
 import { BitrixModule } from './bitrix/bitrix.module';
 import { TitulosVencidosModule } from './titulos-vencidos/titulos-vencidos.module';
+import { AcoesModule } from './acoes/acoes.module';
+import { KanbanModule } from './kanban/kanban.module';
+import { RelatoriosModule } from './relatorios/relatorios.module';
+import { WhatsappModule } from './whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -14,6 +18,10 @@ import { TitulosVencidosModule } from './titulos-vencidos/titulos-vencidos.modul
     DatabaseModule,
     BitrixModule,
     TitulosVencidosModule,
+    AcoesModule,
+    KanbanModule,
+    RelatoriosModule,
+    WhatsappModule,
   ],
 })
 export class AppModule {}

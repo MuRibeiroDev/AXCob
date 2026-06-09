@@ -7,7 +7,7 @@ export type StatusKey = 'open' | 'nego' | 'acordo' | 'protesto' | 'protestado' |
 /** Soma de valores por faixa de atraso. */
 export type Buckets = Record<AgingKey, number>;
 
-export type TipoCarteira = 'comissarias' | 'todos';
+export type TipoBoleto = 'todos' | 'C' | 'T'; // filtro "Tipo de Boleto" (coluna M); 'todos' = sem filtro
 
 export interface Titulo {
   id: string; // DOCUMENTO
@@ -24,6 +24,7 @@ export interface Titulo {
   negativado: boolean;
   situacao: string | null;
   tipo: string | null;
+  sistema: string | null;
 }
 
 export interface Sacado {

@@ -151,6 +151,15 @@ body {
 ::-webkit-scrollbar-thumb { background: #d6ddd9; border-radius: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* ---- Spinner ---- */
+@keyframes axspin { to { transform: rotate(360deg); } }
+.spin { animation: axspin .8s linear infinite; }
+
+/* ---- Fade/slide de entrada (transições de conteúdo) ---- */
+@keyframes axfade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.fade-in { animation: axfade .22s ease both; }
+@media (prefers-reduced-motion: reduce) { .fade-in { animation: none; } }
+
 /* ---- Util ---- */
 .mono-id { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 .divider { height: 1px; background: var(--line); }

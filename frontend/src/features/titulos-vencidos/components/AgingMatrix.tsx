@@ -9,6 +9,7 @@ import { fmtBRL, fmtBRLshort, fmtDate } from '@/lib/format';
 import type { Buckets, Sacado, Titulo } from '@/lib/types';
 
 export type AcaoTitulo = 'protestar' | 'negativar';
+export type Prioridade = 'PADRAO' | 'URGENTE';
 
 /** Título já protestado (em processo ou protestado) — não pode protestar de novo. */
 const jaProtestado = (t: Titulo): boolean => t.protesto != null;
@@ -63,8 +64,9 @@ function HeatCell({ value, meta, max }: { value: number; meta: AgeMeta; max: num
   );
 }
 
-function TituloDetail({ titulos, onAction }: { titulos: Titulo[]; onAction: (a: AcaoTitulo, ts: Titulo[]) => void }) {
+function TituloDetail({ titulos, sacado, onAction }: { titulos: Titulo[]; sacado: Sacado; onAction: (a: AcaoTitulo, s: Sacado, ts: Titulo[], prioridade: Prioridade) => void }) {
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const [prioridade, setPrioridade] = useState<Prioridade>('PADRAO');
 
   const toggle = (id: string) =>
     setSel((prev) => {
@@ -81,7 +83,7 @@ function TituloDetail({ titulos, onAction }: { titulos: Titulo[]; onAction: (a: 
   const negativaveis = selecionados.filter((t) => !jaNegativado(t));
   const act = (a: AcaoTitulo, ts: Titulo[]) => {
     if (ts.length === 0) return;
-    onAction(a, ts);
+    onAction(a, sacado, ts, prioridade);
     setSel(new Set());
   };
 
@@ -136,6 +138,28 @@ function TituloDetail({ titulos, onAction }: { titulos: Titulo[]; onAction: (a: 
             : 'Selecione títulos para protestar ou negativar'}
         </span>
         <div style={{ flex: 1 }} />
+        {/* toggle de prioridade */}
+        <div style={{ display: 'inline-flex', background: 'var(--white)', border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: 3, gap: 2 }}>
+          {(['PADRAO', 'URGENTE'] as Prioridade[]).map((p) => {
+            const on = prioridade === p;
+            const urg = p === 'URGENTE';
+            return (
+              <button
+                key={p}
+                onClick={() => setPrioridade(p)}
+                title="Prioridade do card no Bitrix"
+                style={{
+                  border: 'none', cursor: 'pointer', font: 'inherit', fontWeight: 600, fontSize: 12,
+                  padding: '5px 11px', borderRadius: 5, transition: 'all .12s',
+                  background: on ? (urg ? 'var(--age-crit-bg)' : 'var(--green-50)') : 'transparent',
+                  color: on ? (urg ? 'var(--age-crit-fg)' : 'var(--green-700)') : 'var(--ink-500)',
+                }}
+              >
+                {urg ? 'Urgente' : 'Padrão'}
+              </button>
+            );
+          })}
+        </div>
         <button
           className="btn btn-ghost btn-sm"
           disabled={protestaveis.length === 0}
@@ -160,7 +184,7 @@ function TituloDetail({ titulos, onAction }: { titulos: Titulo[]; onAction: (a: 
 }
 
 function SacadoRow({ s, max, open, onToggle, onAction }: {
-  s: Sacado; max: number; open: boolean; onToggle: () => void; onAction: (a: AcaoTitulo, ts: Titulo[]) => void;
+  s: Sacado; max: number; open: boolean; onToggle: () => void; onAction: (a: AcaoTitulo, sac: Sacado, ts: Titulo[], prioridade: Prioridade) => void;
 }) {
   const b = sacadoBuckets(s);
   return (
@@ -196,7 +220,7 @@ function SacadoRow({ s, max, open, onToggle, onAction }: {
         ))}
         <div className="tnum" style={{ textAlign: 'right', fontSize: 14, fontWeight: 700 }}>{fmtBRL(s.total)}</div>
       </div>
-      {open && <TituloDetail titulos={s.titulos} onAction={onAction} />}
+      {open && <TituloDetail titulos={s.titulos} sacado={s} onAction={onAction} />}
     </div>
   );
 }
@@ -210,7 +234,7 @@ export interface AgingMatrixProps {
   max: number;
   openRow: number | null;
   onToggleRow: (i: number) => void;
-  onAction: (a: AcaoTitulo, ts: Titulo[]) => void;
+  onAction: (a: AcaoTitulo, sac: Sacado, ts: Titulo[], prioridade: Prioridade) => void;
 }
 
 export function AgingMatrix({ sacados, max, openRow, onToggleRow, onAction }: AgingMatrixProps) {

@@ -14,11 +14,12 @@ async function bootstrap() {
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);
-  app.enableCors({ origin: origins, credentials: true });
+  // CORS_ORIGIN="*" reflete qualquer origem (útil p/ acesso na rede local)
+  app.enableCors({ origin: origins.includes('*') ? true : origins, credentials: true });
 
   const port = Number(config.get('PORT') ?? 3000);
-  await app.listen(port);
-  new Logger('Bootstrap').log(`AxCob API on http://localhost:${port}/api`);
+  await app.listen(port, '0.0.0.0'); // escuta em todas as interfaces
+  new Logger('Bootstrap').log(`AxCob API on http://0.0.0.0:${port}/api`);
 }
 
 bootstrap();

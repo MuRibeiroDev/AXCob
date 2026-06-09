@@ -11,6 +11,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: true, // escuta em 0.0.0.0 → acessível pela rede (ex.: 192.168.1.25:5173)
     port: 5173,
     open: true,
   },

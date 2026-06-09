@@ -1,4 +1,4 @@
-/* Top bar contextual: seletor de carteira (responsável) + tipo + posição + ações. */
+/* Top bar contextual: seletor de carteira (responsável) + posição + ações. */
 import { Icon } from '@/components/Icon';
 import { fmtDate } from '@/lib/format';
 import { CarteiraSelect } from './CarteiraSelect';

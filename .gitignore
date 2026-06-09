@@ -36,6 +36,15 @@ npm-debug.log*
 # Claude Code (config local da máquina)
 .claude/settings.local.json
 
+# Playwright / Power BI (sessão cacheada com tokens + prints gerados)
+.pw-profile/
+scripts/.powerbi_session.json
+scripts/*.png
+
+# Banco SQLite dos PNGs de relatório (gerado em runtime)
+data/
+*.db
+
 # Editor / SO
 .vscode/
 .idea/

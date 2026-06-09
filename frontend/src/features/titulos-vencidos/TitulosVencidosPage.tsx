@@ -5,12 +5,12 @@ import { Icon } from '@/components/Icon';
 import { ageMeta, tituloEstados } from '@/lib/aging';
 import { api } from '@/lib/api';
 import { fmtBRL } from '@/lib/format';
-import type { CarteiraData, StatusKey, Titulo } from '@/lib/types';
+import type { CarteiraData, Sacado, StatusKey, TipoBoleto, Titulo } from '@/lib/types';
 import { TopBar } from './components/TopBar';
 import { KpiStrip } from './components/KpiStrip';
 import { FilterBar, EMPTY_FILTERS, type Filters } from './components/FilterBar';
 import { CedentesRail } from './components/CedentesRail';
-import { AgingMatrix, type AcaoTitulo } from './components/AgingMatrix';
+import { AgingMatrix, type AcaoTitulo, type Prioridade } from './components/AgingMatrix';
 import { filterCarteira } from './selectors';
 
 function CenterMsg({ children, tone }: { children: ReactNode; tone?: 'error' }) {
@@ -21,13 +21,31 @@ function CenterMsg({ children, tone }: { children: ReactNode; tone?: 'error' }) 
   );
 }
 
+// carteira e solicitante persistem entre visitas à aba (localStorage)
+const CARTEIRA_KEY = 'axcob.titulos-vencidos.carteira';
+const SOLICITANTE_KEY = 'axcob.titulos-vencidos.solicitante';
+
 export function TitulosVencidosPage() {
   const [responsaveis, setResponsaveis] = useState<string[]>([]);
-  const [responsavel, setResponsavel] = useState<string>('');
+  const [responsavel, setResponsavel] = useState<string>(() => {
+    try { return localStorage.getItem(CARTEIRA_KEY) || ''; } catch { return ''; }
+  });
+  const [tipoBoleto, setTipoBoleto] = useState<TipoBoleto>('C'); // filtro Tipo de Boleto (coluna M)
+
+  // analistas (com webhook próprio) e o último escolhido (default do modal)
+  const [usuarios, setUsuarios] = useState<{ id: string; nome: string }[]>([]);
+  const [solicitante, setSolicitante] = useState<string>(() => {
+    try { return localStorage.getItem(SOLICITANTE_KEY) || ''; } catch { return ''; }
+  });
+  // modal de solicitação (protestar/negativar) — escolha do analista no clique
+  const [pendente, setPendente] = useState<{ acao: AcaoTitulo; sacado: Sacado; titulos: Titulo[]; prioridade: Prioridade } | null>(null);
+  const [analistaSel, setAnalistaSel] = useState<string>('');
+  const [criando, setCriando] = useState(false);
 
   const [data, setData] = useState<CarteiraData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // estado da tela
   const [sel, setSel] = useState<string>('');
@@ -39,36 +57,53 @@ export function TitulosVencidosPage() {
     setOpenRow(null);
   };
 
-  // carrega lista de carteiras
+  // carrega lista de carteiras — mantém a carteira salva se ainda existir
   useEffect(() => {
     api.responsaveis()
       .then((rs) => {
         setResponsaveis(rs);
-        setResponsavel((cur) => cur || rs[0] || '');
+        setResponsavel((cur) => (cur && rs.includes(cur) ? cur : rs[0] || ''));
       })
       .catch((e) => setError(e.message));
   }, []);
 
-  // carrega a carteira selecionada
+  // salva a carteira escolhida p/ persistir ao voltar à aba
+  useEffect(() => {
+    try { if (responsavel) localStorage.setItem(CARTEIRA_KEY, responsavel); } catch { /* ignore */ }
+  }, [responsavel]);
+
+  // carrega analistas (com webhook próprio) p/ escolher quem abre o card; persiste a escolha
+  useEffect(() => {
+    api.analistas().then(setUsuarios).catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem(SOLICITANTE_KEY, solicitante); } catch { /* ignore */ }
+  }, [solicitante]);
+
+  // trocar de carteira OU de tipo de boleto reseta filtros e linha aberta
+  useEffect(() => {
+    setFilters(EMPTY_FILTERS);
+    setOpenRow(null);
+  }, [responsavel, tipoBoleto]);
+
+  // carrega/recarrega a carteira (reloadKey força re-busca preservando seleção/filtros)
   useEffect(() => {
     if (!responsavel) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.carteira(responsavel)
+    api.carteira(responsavel, tipoBoleto)
       .then((d) => {
         if (cancelled) return;
         setData(d);
-        setSel(d.cedentes[0]?.id ?? '');
-        setOpenRow(null);
-        setFilters(EMPTY_FILTERS);
+        setSel((cur) => (d.cedentes.some((c) => c.id === cur) ? cur : d.cedentes[0]?.id ?? ''));
       })
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
-  }, [responsavel]);
+  }, [responsavel, tipoBoleto, reloadKey]);
 
   // carteira filtrada: filtros recalculam KPIs, totais do rail e do cedente (como no BI)
   const filtered = useMemo(() => (data ? filterCarteira(data, filters) : null), [data, filters]);
@@ -113,15 +148,49 @@ export function TitulosVencidosPage() {
     setFilters((f) => ({ ...f, sacado: [] })); // sacados mudam de cedente p/ cedente
   };
 
-  // TODO: ligar ao endpoint de escrita (cria card no Bitrix pipeline 116/112).
-  const handleAction = (acao: AcaoTitulo, titulos: Titulo[]) => {
-    if (titulos.length === 0) return;
-    const nums = titulos.map((t) => t.id).join(', ');
+  // Ao clicar em Protestar/Negativar: abre o modal p/ escolher o analista (quem abre o card).
+  const handleAction = (acao: AcaoTitulo, sacado: Sacado, titulos: Titulo[], prioridade: Prioridade) => {
+    if (titulos.length === 0 || !cedente) return;
+    setAnalistaSel(solicitante || '');
+    setPendente({ acao, sacado, titulos, prioridade });
+  };
+
+  // Confirma no modal: cria as solicitações no Bitrix com o analista escolhido.
+  const confirmarSolicitacao = async () => {
+    if (!pendente || criando) return;
+    const { acao, sacado, titulos, prioridade } = pendente;
     const label = acao === 'protestar' ? 'Protestar' : 'Negativar';
-    window.alert(
-      `${label} ${titulos.length} título(s):\n${nums}\n\n` +
-      '(o envio ao Bitrix será ligado quando o endpoint de escrita estiver pronto)',
-    );
+    const etapa = acao === 'protestar' ? 'Solicitações de Protesto' : 'Solicitações de Negativação';
+    const sacadoLimpo = sacado.nome.replace(/-\s*sacado\s*$/i, '').trim();
+
+    const itens = titulos.map((t) => ({
+      numeroTitulo: t.id,
+      valor: t.valorOriginal,
+      cnpjSacado: sacado.doc,
+      razaoSacado: sacadoLimpo,
+      sistema: t.sistema,
+      prioridade,
+    }));
+
+    setCriando(true);
+    try {
+      const r = acao === 'protestar'
+        ? await api.protestar(itens, analistaSel || undefined)  // analistaSel = id do analista
+        : await api.negativar(itens, analistaSel || undefined);
+      setSolicitante(analistaSel); // lembra a última escolha como padrão
+      setPendente(null);
+      if (r.falhas > 0) {
+        const err = r.resultados.find((x) => !x.ok)?.erro ?? '';
+        window.alert(`${r.ok}/${r.total} criados. ${r.falhas} falha(s). ${err}`);
+      } else {
+        window.alert(`${r.ok} card(s) criado(s) no Bitrix em "${etapa}".`);
+      }
+      setReloadKey((k) => k + 1); // re-busca a carteira (status atualizado)
+    } catch (e) {
+      window.alert(`Erro ao ${label.toLowerCase()}: ${(e as Error).message}`);
+    } finally {
+      setCriando(false);
+    }
   };
 
   return (
@@ -146,7 +215,7 @@ export function TitulosVencidosPage() {
       ) : data.cedentes.length === 0 ? (
         <CenterMsg>
           <Icon name="check" size={28} style={{ color: 'var(--green-500)' }} />
-          Nenhum título vencido nesta carteira ({data.tipo}).
+          Nenhum título vencido nesta carteira ({data.tipo === 'todos' ? 'todos os boletos' : `boleto tipo ${data.tipo}`}).
         </CenterMsg>
       ) : (
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -162,6 +231,8 @@ export function TitulosVencidosPage() {
                   sacadoOptions={sacadoOptions}
                   statusOptions={statusOptions}
                   tipoOptions={tipoOptions}
+                  tipoBoleto={tipoBoleto}
+                  onTipoBoleto={setTipoBoleto}
                   onReset={() => patchFilters(EMPTY_FILTERS)}
                 />
               </div>
@@ -208,6 +279,93 @@ export function TitulosVencidosPage() {
           </div>
         </div>
       )}
+
+      {pendente && (
+        <SolicitarModal
+          acao={pendente.acao}
+          qtd={pendente.titulos.length}
+          sacado={pendente.sacado.nome.replace(/-\s*sacado\s*$/i, '').trim()}
+          prioridade={pendente.prioridade}
+          analistas={usuarios}
+          analistaSel={analistaSel}
+          onAnalista={setAnalistaSel}
+          criando={criando}
+          onCancelar={() => !criando && setPendente(null)}
+          onConfirmar={confirmarSolicitacao}
+        />
+      )}
+    </div>
+  );
+}
+
+function SolicitarModal({ acao, qtd, sacado, prioridade, analistas, analistaSel, onAnalista, criando, onCancelar, onConfirmar }: {
+  acao: AcaoTitulo; qtd: number; sacado: string; prioridade: Prioridade;
+  analistas: { id: string; nome: string }[]; analistaSel: string; onAnalista: (id: string) => void;
+  criando: boolean; onCancelar: () => void; onConfirmar: () => void;
+}) {
+  const label = acao === 'protestar' ? 'Protestar' : 'Negativar';
+  const cor = acao === 'protestar' ? '#6D28D9' : 'var(--age-crit-fg)';
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancelar(); }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(16,35,27,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 80, padding: 24 }}
+    >
+      <div className="fade-in" style={{ width: 'min(460px, 100%)', maxHeight: '86vh', background: 'var(--white)', borderRadius: 14, boxShadow: 'var(--sh-lg)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '15px 20px', borderBottom: '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <Icon name={acao === 'protestar' ? 'gavel' : 'alert'} size={17} style={{ color: cor }} />
+            <div style={{ fontSize: 14.5, fontWeight: 700 }}>{label} {qtd} título(s)</div>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--ink-400)', marginTop: 3 }}>
+            {sacado} · prioridade {prioridade === 'URGENTE' ? 'URGENTE' : 'Padrão'}
+          </div>
+        </div>
+
+        <div style={{ padding: '16px 20px', overflowY: 'auto' }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-700)', marginBottom: 10 }}>
+            Quem está abrindo o card?
+          </div>
+          {analistas.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: 'var(--ink-500)', background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 9, padding: '10px 12px' }}>
+              Nenhum analista configurado — o card será criado pela <b>integração</b>.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {[{ id: '', nome: 'Integração (padrão)' }, ...analistas].map((a) => {
+                const on = analistaSel === a.id;
+                return (
+                  <button
+                    key={a.id || '_'}
+                    type="button"
+                    onClick={() => onAnalista(a.id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+                      font: 'inherit', fontSize: 13, cursor: 'pointer',
+                      padding: '9px 11px', borderRadius: 9,
+                      border: `1.5px solid ${on ? 'var(--green-500)' : 'var(--line)'}`,
+                      background: on ? 'var(--green-50)' : 'var(--white)',
+                      color: a.id ? 'var(--ink-900)' : 'var(--ink-500)', fontWeight: on ? 700 : 500,
+                    }}
+                  >
+                    <span style={{ width: 16, height: 16, borderRadius: 999, flex: '0 0 auto', border: `1.5px solid ${on ? 'var(--green-500)' : 'var(--ink-300)'}`, background: on ? 'var(--green-500)' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {on && <span style={{ width: 6, height: 6, borderRadius: 999, background: '#fff' }} />}
+                    </span>
+                    {a.nome}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: '0 20px 18px', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button className="btn btn-ghost btn-sm" onClick={onCancelar} disabled={criando}>Cancelar</button>
+          <button className="btn btn-primary btn-sm" onClick={onConfirmar} disabled={criando}>
+            <Icon name={criando ? 'history' : 'check'} size={14} className={criando ? 'spin' : undefined} />
+            {criando ? 'Criando…' : label}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

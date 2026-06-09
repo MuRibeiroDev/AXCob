@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
 import { Popover } from '@/components/Popover';
 import { AGE_SCALE, STATUS } from '@/lib/aging';
-import type { AgingKey, StatusKey } from '@/lib/types';
+import type { AgingKey, StatusKey, TipoBoleto } from '@/lib/types';
 
 export type AgingFilter = 'all' | AgingKey;
 
@@ -45,6 +45,8 @@ interface FilterBarProps {
   sacadoOptions: string[];
   statusOptions: StatusKey[];
   tipoOptions: string[];
+  tipoBoleto: TipoBoleto;            // Tipo de Boleto (coluna M) — filtro server-side
+  onTipoBoleto: (t: TipoBoleto) => void;
   onReset: () => void;
 }
 
@@ -94,7 +96,7 @@ const panelTitle = (t: string) => (
 );
 
 export function FilterBar({
-  filters, onChange, sacadoOptions, statusOptions, tipoOptions, onReset,
+  filters, onChange, sacadoOptions, statusOptions, tipoOptions, tipoBoleto, onTipoBoleto, onReset,
 }: FilterBarProps) {
   const segs: { key: AgingFilter; label: string }[] = [
     { key: 'all', label: 'Todos' },
@@ -122,6 +124,34 @@ export function FilterBar({
           style={{ border: 'none', outline: 'none', background: 'transparent', font: 'inherit', flex: 1, color: 'var(--ink-900)' }}
         />
       </div>
+
+      {/* Tipo de Boleto (coluna M) — igual ao slicer do Power BI; recarrega a carteira */}
+      <Popover
+        minWidth={180}
+        trigger={({ open, toggle }) => (
+          <FieldButton icon="doc" active={tipoBoleto !== 'todos'} open={open} onClick={toggle}>
+            {tipoBoleto === 'todos' ? 'Tipo de boleto' : `Boleto ${tipoBoleto}`}
+          </FieldButton>
+        )}
+      >
+        {(close) => (
+          <div>
+            {panelTitle('Tipo de Boleto')}
+            {([
+              { key: 'todos', label: 'Todos' },
+              { key: 'C', label: 'Tipo C' },
+              { key: 'T', label: 'Tipo T' },
+            ] as { key: TipoBoleto; label: string }[]).map((b) => (
+              <CheckRow
+                key={b.key}
+                checked={tipoBoleto === b.key}
+                label={<span style={{ fontWeight: 600 }}>{b.label}</span>}
+                onClick={() => { if (tipoBoleto !== b.key) onTipoBoleto(b.key); close(); }}
+              />
+            ))}
+          </div>
+        )}
+      </Popover>
 
       {/* segmented de aging */}
       <div style={{ display: 'inline-flex', background: 'var(--white)', border: '1px solid var(--line)', borderRadius: 'var(--r-sm)', padding: 3, gap: 2 }}>

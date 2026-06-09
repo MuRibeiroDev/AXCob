@@ -29,7 +29,11 @@ export class DatabaseService implements OnModuleDestroy {
       database,
       user,
       password,
-      options: { encrypt: true, trustServerCertificate: true },
+      // useUTC:false → datas (tipo `date`/`datetime`) são interpretadas no fuso
+      // local (America/Sao_Paulo) em vez de UTC. Sem isso, uma `date` 30/05 volta
+      // como 2026-05-30T00:00:00Z e, em UTC-3, getDate() local vira 29/05 — o que
+      // deslocava todos os vencimentos em 1 dia (bug nos relatórios de atraso).
+      options: { encrypt: true, trustServerCertificate: true, useUTC: false },
       pool: { max: 5, min: 0, idleTimeoutMillis: 30000 },
       connectionTimeout: 30000,
       requestTimeout: 90000,

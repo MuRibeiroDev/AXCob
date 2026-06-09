@@ -1,6 +1,7 @@
-/* Rail esquerdo: total da carteira + lista de cedentes ranqueada por exposição. */
-import { useMemo } from 'react';
+/* Rail esquerdo: total da carteira + busca por nome + lista de cedentes ranqueada. */
+import { useMemo, useState } from 'react';
 import { AgingBar } from '@/components/AgingBar';
+import { Icon } from '@/components/Icon';
 import { ageMeta } from '@/lib/aging';
 import { fmtBRL } from '@/lib/format';
 import type { Cedente, Kpis } from '@/lib/types';
@@ -13,10 +14,14 @@ export interface CedentesRailProps {
 }
 
 export function CedentesRail({ cedentes, kpis, sel, onSelect }: CedentesRailProps) {
-  const ordenados = useMemo(
-    () => [...cedentes].sort((a, b) => b.total - a.total),
-    [cedentes],
-  );
+  const [busca, setBusca] = useState('');
+
+  const ordenados = useMemo(() => {
+    const q = busca.trim().toLowerCase();
+    return [...cedentes]
+      .filter((c) => !q || c.nome.toLowerCase().includes(q))
+      .sort((a, b) => b.total - a.total);
+  }, [cedentes, busca]);
 
   return (
     <div
@@ -41,11 +46,41 @@ export function CedentesRail({ cedentes, kpis, sel, onSelect }: CedentesRailProp
         </div>
       </div>
 
+      {/* ---- Busca por nome de cedente ---- */}
+      <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--line)', flex: '0 0 auto' }}>
+        <div className="field" style={{ height: 34, width: '100%', cursor: 'text' }}>
+          <Icon name="search" size={14} style={{ color: 'var(--ink-400)' }} />
+          <input
+            value={busca}
+            onChange={(e) => setBusca(e.target.value)}
+            placeholder="Filtrar cedente por nome…"
+            style={{ border: 'none', outline: 'none', background: 'transparent', font: 'inherit', fontSize: 12.5, flex: 1, minWidth: 0, color: 'var(--ink-900)' }}
+          />
+          {busca && (
+            <button
+              onClick={() => setBusca('')}
+              title="Limpar"
+              style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--ink-400)', padding: 0, display: 'flex', alignItems: 'center', fontSize: 15, lineHeight: 1 }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* ---- Lista de cedentes ---- */}
       <div style={{ padding: 12, flex: 1, overflowY: 'auto' }}>
-        <div style={{ fontSize: 10.5, color: 'var(--ink-400)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', padding: '0 6px 8px' }}>
-          Cedentes
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '0 6px 8px' }}>
+          <span style={{ fontSize: 10.5, color: 'var(--ink-400)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em' }}>
+            Cedentes
+          </span>
+          {busca && <span className="tnum" style={{ fontSize: 10.5, color: 'var(--ink-400)', fontWeight: 600 }}>{ordenados.length}</span>}
         </div>
+        {ordenados.length === 0 && (
+          <div style={{ padding: '16px 8px', fontSize: 12, color: 'var(--ink-400)', textAlign: 'center' }}>
+            Nenhum cedente com “{busca}”.
+          </div>
+        )}
         {ordenados.map((ced) => {
           const on = sel === ced.id;
           const m = ageMeta(ced.aging);

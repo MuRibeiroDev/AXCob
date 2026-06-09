@@ -17,6 +17,7 @@ export interface Titulo {
   negativado: boolean;
   situacao: string | null;
   tipo: string | null;
+  sistema: string | null; // FIDC / FIDC Agro / Securitizadora — define a Plataforma no Bitrix
 }
 
 export interface Sacado {

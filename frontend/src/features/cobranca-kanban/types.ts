@@ -16,6 +16,7 @@ export interface KanbanCard {
   numero_titulo: string | null;
   razao_social_sacado: string | null;
   cnpj_cpf_sacado: string | null;
+  criado_por: string;
   status: KanbanStatus;
   valor_face: number | null;
   liquidado: number | null;

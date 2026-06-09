@@ -14,7 +14,7 @@ const CEDENTE_EXCLUIDO = '05.673.133/0001-42';
 // Operação excluída no Power BI.
 const OP_EXCLUIDA = 7190;
 
-type Tipo = 'comissarias' | 'todos';
+type TipoBoleto = 'todos' | 'C' | 'T'; // tipo de boleto (coluna M); 'todos' = sem filtro
 
 interface Row {
   CEDENTE: string | null;
@@ -34,6 +34,7 @@ interface Row {
   TIPO: string | null;
   CR: string | null;
   M: string | null;
+  SISTEMA: string | null;
 }
 
 @Injectable()
@@ -64,24 +65,26 @@ export class TitulosVencidosService {
     return d.toISOString().slice(0, 10);
   }
 
-  /** Hierarquia cedentes → sacados → títulos vencidos da carteira do responsável. */
-  async porResponsavel(responsavel: string, tipo: Tipo): Promise<CarteiraData> {
+  /** Hierarquia cedentes → sacados → títulos vencidos da carteira do responsável.
+   *  tipoBoleto = filtro da coluna M (C/T), igual ao slicer "Tipo de Boleto" do BI. */
+  async porResponsavel(responsavel: string, tipoBoleto: TipoBoleto): Promise<CarteiraData> {
     if (!responsavel?.trim()) throw new BadRequestException('Responsável é obrigatório.');
-    if (tipo !== 'comissarias' && tipo !== 'todos') {
-      throw new BadRequestException(`Tipo inválido: ${tipo}`);
+    if (tipoBoleto !== 'todos' && tipoBoleto !== 'C' && tipoBoleto !== 'T') {
+      throw new BadRequestException(`Tipo de boleto inválido: ${tipoBoleto}`);
     }
 
     const tipoList = TIPOS_PERMITIDOS.map((t) => `'${t}'`).join(', ');
-    const comissariasWhere = tipo === 'comissarias' ? "AND t.CR IN ('C','CE') AND t.M = 'C'" : '';
+    const boletoWhere = tipoBoleto === 'todos' ? '' : 'AND t.M = @tipoBoleto';
 
-    // Mesmos filtros da fonte do Power BI (fTitulosAbertos / vw_titulos_abertos_espelho_bi).
+    // Mesmos filtros da fonte do Power BI (fTitulosAbertos / vw_titulos_abertos_espelho_bi),
+    // filtrando pelo Tipo de Boleto (coluna M = C ou T).
     const sql = `
       SELECT
         t.CEDENTE, t.CPF_CNPJ_CEDENTE, t.SACADO, t.CPF_CNPJ_SACADO,
         t.DOCUMENTO, t.ID_TITULO, t.VENCIMENTO,
         t.VALOR, t.MULTA, t.JUROS, t.TARIFAS, t.TOTAL,
         DATEDIFF(DAY, t.VENCIMENTO, CAST(GETDATE() AS DATE)) AS DIAS,
-        t.SITUACAO, t.TIPO, t.CR, t.M
+        t.SITUACAO, t.TIPO, t.CR, t.M, t.SISTEMA
       FROM data_core.vw_titulos_abertos_espelho_bi AS t
       INNER JOIN (
         SELECT CPF_CNPJ, MAX(RESPONSAVEL_COBRANCA) AS RESP
@@ -92,7 +95,7 @@ export class TitulosVencidosService {
       ) AS c ON c.CPF_CNPJ = t.CPF_CNPJ_CEDENTE
       WHERE c.RESP = @resp
         AND DATEDIFF(DAY, t.VENCIMENTO, CAST(GETDATE() AS DATE)) > 0
-        ${comissariasWhere}
+        ${boletoWhere}
         AND UPPER(LTRIM(RTRIM(ISNULL(t.TIPO, '')))) IN (${tipoList})
         AND t.HISTORICO NOT LIKE '%PAGO%'
         AND t.CPF_CNPJ_CEDENTE <> '${CEDENTE_EXCLUIDO}'
@@ -100,16 +103,19 @@ export class TitulosVencidosService {
       ORDER BY t.CEDENTE, t.SACADO, t.VENCIMENTO, t.DOCUMENTO
     `;
 
+    const params: Record<string, unknown> = { resp: responsavel.trim() };
+    if (tipoBoleto !== 'todos') params.tipoBoleto = tipoBoleto;
+
     const t0 = Date.now();
-    const rows = await this.db.query<Row>(sql, { resp: responsavel.trim() });
-    this.logger.log(`[vencidos] ${responsavel} (${tipo}): ${rows.length} linhas em ${Date.now() - t0}ms`);
+    const rows = await this.db.query<Row>(sql, params);
+    this.logger.log(`[vencidos] ${responsavel} (boleto ${tipoBoleto}): ${rows.length} linhas em ${Date.now() - t0}ms`);
 
     const statusIdx = await this.bitrix.getStatusIndex();
 
-    return this.montar(rows, responsavel.trim(), tipo, statusIdx);
+    return this.montar(rows, responsavel.trim(), tipoBoleto, statusIdx);
   }
 
-  private montar(rows: Row[], responsavel: string, tipo: string, idx: StatusIndex): CarteiraData {
+  private montar(rows: Row[], responsavel: string, tipoBoleto: string, idx: StatusIndex): CarteiraData {
     const hoje = new Date().toISOString().slice(0, 10);
     const cedentesMap = new Map<string, Cedente>();
     const sacadoKeyMap = new Map<string, Map<string, Sacado>>();
@@ -176,6 +182,7 @@ export class TitulosVencidosService {
         negativado,
         situacao: r.SITUACAO ?? null,
         tipo: r.TIPO ?? null,
+        sistema: r.SISTEMA ?? null,
       };
       sac.titulos.push(titulo);
 
@@ -204,10 +211,10 @@ export class TitulosVencidosService {
     return {
       hoje,
       responsavel,
-      tipo,
+      tipo: tipoBoleto,
       carteira: {
         nome: `Carteira de ${responsavel}`,
-        codigo: tipo === 'comissarias' ? 'Comissárias' : 'Todos os títulos',
+        codigo: tipoBoleto === 'todos' ? 'Todos os boletos' : `Boleto tipo ${tipoBoleto}`,
       },
       cedentes,
       kpis,
