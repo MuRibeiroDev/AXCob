@@ -1,0 +1,138 @@
+name: axcob
+
+# ─────────────────────────── Logging (rotação) ───────────────────────────
+# O driver json-file rotaciona por TAMANHO (o Docker não tem expiração por
+# tempo nativa). 10MB x 7 arquivos ≈ 70MB por container — teto seguro que,
+# no volume de tráfego deste app, cobre ~7 dias de logs sem encher o disco.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "7"
+
+# ─────────────────────────── Serviços ───────────────────────────
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: axcob-backend:latest
+    container_name: axcob-backend
+    restart: unless-stopped
+    env_file:
+      - ./.env                  # .env ÚNICO da raiz: DB, SMART/JWT, Bitrix, OpenAI, Evolution...
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATA_DIR: /app/data       # SQLite (conciliação PIX + relatórios) gravável + persistido
+      REPORT_WORKER_URL: http://worker:8500   # delega a geração de PNG ao worker
+      REL_MAX_CONCURRENT: "2"   # nº de capturas simultâneas (Chromium é pesado)
+    expose:
+      - "3000"                  # exposto SÓ na rede interna (não publicado no host)
+    volumes:
+      - axcob-data:/app/data    # persiste o banco entre rebuilds/down
+    depends_on:
+      worker:
+        condition: service_healthy
+    networks:
+      - axcob-net
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"          # NestJS + mssql: pico de consultas/relatórios
+          memory: 768M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  worker:
+    build:
+      context: .                # contexto = raiz (precisa copiar scripts/)
+      dockerfile: worker/Dockerfile
+    image: axcob-worker:latest
+    container_name: axcob-worker
+    restart: unless-stopped
+    env_file:
+      - ./.env                  # POWERBI_USERNAME/PASSWORD p/ o login automático
+    environment:
+      WORKER_PORT: "8500"
+      PLAYWRIGHT_NO_SANDBOX: "1"
+      POWERBI_SESSION_PATH: /app/session/.powerbi_session.json
+    expose:
+      - "8500"                  # HTTP interno (só backend chama)
+    volumes:
+      - axcob-session:/app/session   # persiste a sessão do Power BI (evita relogar)
+    shm_size: "1gb"             # Chromium usa /dev/shm; evita crash em páginas grandes
+    networks:
+      - axcob-net
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"           # Chromium (até REL_MAX_CONCURRENT capturas simultâneas)
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api      # mesma origem do proxy -> nginx roteia p/ o backend
+    image: axcob-frontend:latest
+    container_name: axcob-frontend
+    restart: unless-stopped
+    expose:
+      - "80"                    # estático servido por nginx, só na rede interna
+    networks:
+      - axcob-net
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"          # nginx servindo estático: footprint mínimo
+          memory: 128M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+
+  proxy:
+    image: nginx:1.27-alpine
+    container_name: axcob-proxy
+    restart: unless-stopped
+    ports:
+      - "2555:80"               # ÚNICA porta publicada — entrada de todo o tráfego
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks:
+      - axcob-net
+    logging: *default-logging
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+
+# ─────────────────────────── Rede ───────────────────────────
+networks:
+  axcob-net:
+    name: axcob-net
+    driver: bridge
+
+# ─────────────────────────── Volumes ───────────────────────────
+volumes:
+  axcob-data:
+    name: axcob-data
+  axcob-session:
+    name: axcob-session

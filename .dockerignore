@@ -1,0 +1,22 @@
+# Contexto do build do WORKER (context = raiz). backend/ e frontend/ têm seus
+# próprios .dockerignore (context próprio). Aqui só interessa scripts/.
+**/node_modules
+**/dist
+.git
+.claude
+.vscode
+.idea
+data
+backend
+frontend
+nginx
+*.log
+.env
+.env.*
+!.env.example
+
+# Não levar sessão/prints/caches do Power BI p/ dentro da imagem
+scripts/.powerbi_session.json
+scripts/*.png
+**/__pycache__
+.pw-profile

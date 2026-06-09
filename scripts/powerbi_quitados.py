@@ -12,6 +12,7 @@ mais o print final (print_quitados.png). Datas calculadas dinamicamente.
 from __future__ import annotations
 import asyncio
 import io
+import os
 import argparse
 from datetime import date, timedelta
 from pathlib import Path
@@ -38,17 +39,148 @@ CAP_VPH = 1500    # altura da viewport DURANTE a captura. NÃO ALTERAR: o PBI us
                   # largura/escala da tabela (contentW) e, portanto, o PNG. 1500 → contentW=994.
 
 ROOT = Path(__file__).resolve().parent.parent
-SESSION_PATH = ROOT / "scripts" / ".powerbi_session.json"
+# Caminho da sessão: configurável via env (no container vai p/ um volume persistente);
+# no dev local cai no default scripts/.powerbi_session.json.
+SESSION_PATH = Path(os.environ.get("POWERBI_SESSION_PATH") or (ROOT / "scripts" / ".powerbi_session.json"))
 URL = ("https://app.powerbi.com/groups/3a380369-2411-47f7-9c7f-d5fa51d75cac/"
        "reports/e8c4f016-f8d3-445c-a333-b93a06d6b119/ba6001c1c04ad8303134"
        "?language=pt-BR&experience=power-bi&navContentPaneEnabled=false&filterPaneEnabled=false")
 
 HEADED = False  # headless: roda sem janela (evita fechamento acidental no meio da captura)
-import os
+import sys
 import time
+
+# Args do Chromium. Em container (root, sem namespaces) o sandbox falha → liga
+# --no-sandbox via env. --disable-dev-shm-usage evita crash com /dev/shm pequeno.
+LAUNCH_ARGS = ["--start-maximized"]
+if os.environ.get("PLAYWRIGHT_NO_SANDBOX") == "1":
+    LAUNCH_ARGS += ["--no-sandbox", "--disable-dev-shm-usage"]
+
+# Console do Windows às vezes usa cp1252 (não tem '→', '…' etc.) e os prints
+# do script quebram com UnicodeEncodeError. Força UTF-8 na saída.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 CAT_DEBUG = os.environ.get("CAT_DEBUG", "0") == "1"  # logging detalhado da seleção de Categoria
 TIMING = os.environ.get("TIMING", "0") == "1"        # imprime tempo por fase (diagnóstico)
 DEBUG_SHOTS = os.environ.get("DEBUG_SHOTS", "0") == "1"  # salva q_stepN.png (debug; fora do PNG final)
+
+
+# ─────────────────────── .env + login automático ───────────────────────
+def _load_env() -> None:
+    """Carrega o .env ÚNICO da raiz em os.environ (sem sobrescrever o que já existe).
+    Evita depender do python-dotenv: parser simples KEY=VALUE."""
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return
+    try:
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except Exception as e:
+        print(f"   (aviso: não consegui ler o .env: {e})")
+
+
+_load_env()
+
+
+_VISUAL_SEL = '[class*="visualContainer"]'   # report carregado (logado)
+_SSO_EMAIL = '#email'                         # página /singleSignOn do Power BI
+_SSO_SUBMIT = '#submitBtn'                    # botão "Enviar" do SSO
+_MS_EMAIL = 'input[type="email"], input[name="loginfmt"]'      # login da Microsoft
+_MS_PWD = 'input[type="password"], input[name="passwd"]'
+_MS_NEXT = '#idSIButton9, input[type="submit"]'               # Avançar/Entrar/Sim
+
+
+async def ensure_logged_in(page, *, timeout: int = 60_000) -> bool:
+    """Garante a autenticação no Power BI. Retorna True se efetuou login.
+
+    Com sessão válida em cache, o report abre direto e isto é no-op (False).
+    Sem sessão, o fluxo é: página de SSO do Power BI (digita e-mail → "Enviar")
+    → login da Microsoft (e-mail, se pedido, + senha) → "Continuar conectado?"
+    → volta ao report.
+
+    Conta SEM MFA. Se aparecer 2º fator, o wait_for_url estoura e levanta erro.
+    """
+    async def _visivel(sel: str) -> bool:
+        try:
+            return await page.locator(sel).first.is_visible()
+        except Exception:
+            return False
+
+    # (1) Espera ~25s a página assentar num estado conhecido.
+    estado = None
+    for _ in range(25):
+        if await _visivel(_VISUAL_SEL):
+            estado = "logado"; break
+        if await _visivel(_SSO_EMAIL):
+            estado = "sso"; break
+        if ("login.microsoftonline.com" in page.url or "login.live.com" in page.url
+                or await _visivel(_MS_PWD) or await _visivel(_MS_EMAIL)):
+            estado = "ms"; break
+        await asyncio.sleep(1)
+
+    if estado == "logado":
+        return False              # sessão do cache ainda válida → nada a fazer
+    if estado is None:
+        return False              # nem report nem login → deixa o wait_for visual reportar
+
+    user = os.environ.get("POWERBI_USERNAME", "").strip()
+    pwd = os.environ.get("POWERBI_PASSWORD", "").strip()
+    if not (user and pwd):
+        raise RuntimeError(
+            "Sessão do Power BI ausente/expirada e POWERBI_USERNAME/POWERBI_PASSWORD "
+            "não estão no .env — impossível logar automaticamente."
+        )
+
+    print("-> sessão ausente/expirada: efetuando login automático…")
+    # (2) Página de SSO do Power BI: e-mail + "Enviar" → redireciona p/ a Microsoft.
+    if estado == "sso":
+        print("   SSO do Power BI: enviando e-mail…")
+        await page.fill(_SSO_EMAIL, user)
+        await page.click(_SSO_SUBMIT)
+        try:
+            await page.wait_for_selector(f'{_MS_PWD}, {_MS_EMAIL}', state="visible", timeout=timeout)
+        except Exception:
+            pass
+
+    # (3) Login da Microsoft: e-mail (se ainda for pedido) + senha.
+    if await _visivel(_MS_EMAIL):
+        await page.fill(_MS_EMAIL, user)
+        await page.click(_MS_NEXT)
+    await page.wait_for_selector(_MS_PWD, state="visible", timeout=timeout)
+    await page.fill(_MS_PWD, pwd)
+    await page.click(_MS_NEXT)
+    # "Continuar conectado?" → Sim (faz a sessão durar mais, menos relogins)
+    try:
+        await page.wait_for_selector(_MS_NEXT, timeout=15_000)
+        await page.click(_MS_NEXT)
+    except Exception:
+        pass
+    # (4) Espera voltar ao Power BI (deixa a tela de login).
+    try:
+        await page.wait_for_url("**app.powerbi.com/**", timeout=timeout)
+    except Exception:
+        raise RuntimeError(
+            "Login não concluiu (credencial inválida ou 2º fator inesperado). "
+            "Refaça o login manualmente p/ regenerar a sessão."
+        )
+    print("   login OK")
+    return True
+
+
+async def save_session(ctx) -> None:
+    """Persiste a sessão (cookies renovados) em SESSION_PATH — vira cache p/ as
+    próximas execuções, evitando relogar a cada relatório."""
+    try:
+        await ctx.storage_state(path=str(SESSION_PATH))
+    except Exception as e:
+        print(f"   (aviso: não consegui salvar a sessão: {e})")
 
 
 try:
@@ -707,7 +839,7 @@ async def main(categoria: str = "", out_path: Path | None = None):
         _t["last"] = agora
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=not HEADED, args=["--start-maximized"])
+        browser = await pw.chromium.launch(headless=not HEADED, args=LAUNCH_ARGS)
         ctx = await browser.new_context(
             viewport={"width": 1600, "height": 1000},
             device_scale_factor=DSF,
@@ -717,6 +849,7 @@ async def main(categoria: str = "", out_path: Path | None = None):
         lap("launch+context")
         print("-> abrindo report…")
         await page.goto(URL, wait_until="domcontentloaded", timeout=60_000)
+        await ensure_logged_in(page)  # loga só se a sessão caiu (ausente/expirada)
         await page.wait_for_selector('[class*="visualContainer"]', timeout=120_000)
         # espera o slicer de data (o que o passo 2 usa) ficar pronto, em vez de sleep fixo;
         # se a tela já está pronta, segue na hora — sem mudar o que é capturado.
@@ -725,6 +858,7 @@ async def main(categoria: str = "", out_path: Path | None = None):
         except Exception:
             pass
         await asyncio.sleep(2)
+        await save_session(ctx)  # persiste a sessão (renovada) p/ as próximas execuções
         lap("load+wait_slicer")
 
         print("-> passo 2: período + Tipo Boleto C")

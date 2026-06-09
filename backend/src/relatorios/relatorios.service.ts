@@ -239,7 +239,10 @@ export class RelatoriosService {
   }
   /** Store SQLite dos PNGs (lazy). */
   private store(): RelatorioStore {
-    if (!this.store_) this.store_ = new RelatorioStore(path.join(this.repoRoot(), 'data', 'relatorios.db'));
+    if (!this.store_) {
+      const base = process.env.DATA_DIR?.trim() || path.join(this.repoRoot(), 'data');
+      this.store_ = new RelatorioStore(path.join(base, 'relatorios.db'));
+    }
     return this.store_;
   }
   /** Dia corrente (local) yyyy-mm-dd — chave do "somente do dia". */
@@ -278,8 +281,61 @@ export class RelatoriosService {
     }
   }
 
-  /** Roda UM script de captura e atualiza o estado/SQLite. Resolve ao terminar. */
+  /** Roda UM relatório e atualiza o estado/SQLite. Resolve ao terminar.
+   *  Com REPORT_WORKER_URL setado (Docker), delega ao container worker via HTTP;
+   *  senão, executa o script Python localmente (dev na máquina). */
   private runPng(id: string, job: { script: string; args: string[]; outBase: string }): Promise<void> {
+    const workerUrl = process.env.REPORT_WORKER_URL?.trim();
+    return workerUrl ? this.runPngViaWorker(id, job, workerUrl) : this.runPngLocal(id, job);
+  }
+
+  /** Persiste os PNGs gerados (buffers) no SQLite e marca o estado como pronto. */
+  private salvarResultado(id: string, buffers: Buffer[]): void {
+    const dia = this.hoje();
+    const at = this.store().salvar(id, dia, buffers);
+    const imagens = buffers.map((_b, i) => String(i + 1));
+    this.pngState.set(id, { status: 'pronto', imagens, at });
+    this.logger.log(`PNG ${id} pronto: ${imagens.length} parte(s) no SQLite (dia ${dia})`);
+  }
+
+  /** Gera o PNG chamando o worker (Playwright) por HTTP; recebe as partes em base64. */
+  private async runPngViaWorker(
+    id: string,
+    job: { script: string; args: string[]; outBase: string },
+    workerUrl: string,
+  ): Promise<void> {
+    this.logger.log(`gerando PNG ${id} via worker: ${job.script} ${job.args.join(' ')}`);
+    const timeoutMs = Number(process.env.REPORT_WORKER_TIMEOUT_MS) || 300_000;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${workerUrl.replace(/\/$/, '')}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script: job.script, args: job.args, outBase: job.outBase }),
+        signal: ctrl.signal,
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean; images?: string[]; stderr?: string; error?: string; code?: number;
+      };
+      if (!res.ok || !data.ok || !data.images?.length) {
+        const motivo = data.error || (data.images && !data.images.length ? 'sem imagens' : `código ${data.code ?? res.status}`);
+        this.logger.error(`PNG ${id} (worker) falhou: ${motivo} ${(data.stderr ?? '').slice(-500)}`);
+        this.pngState.set(id, { status: 'erro', imagens: [], erro: `falha na geração (${motivo})` });
+        return;
+      }
+      this.salvarResultado(id, data.images.map((b64) => Buffer.from(b64, 'base64')));
+    } catch (err) {
+      const msg = (err as Error)?.name === 'AbortError' ? `timeout (${timeoutMs}ms)` : (err as Error)?.message ?? String(err);
+      this.logger.error(`PNG ${id} (worker) erro: ${msg}`);
+      this.pngState.set(id, { status: 'erro', imagens: [], erro: msg });
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  /** Gera o PNG executando o script Python localmente (fallback p/ dev). */
+  private runPngLocal(id: string, job: { script: string; args: string[]; outBase: string }): Promise<void> {
     return new Promise<void>((resolve) => {
       const scriptPath = path.join(this.scriptsDir(), job.script);
       const py = process.env.PYTHON_BIN || 'python';
@@ -307,13 +363,9 @@ export class RelatoriosService {
             .map((x) => path.join(this.scriptsDir(), x.f));
           if (arquivos.length) {
             // guarda no SQLite (só do dia; substitui o anterior) e remove os arquivos
-            const dia = this.hoje();
             const buffers = arquivos.map((p) => fs.readFileSync(p));
-            const at = this.store().salvar(id, dia, buffers);
             for (const p of arquivos) { try { fs.unlinkSync(p); } catch { /* ignora */ } }
-            const imagens = buffers.map((_b, i) => String(i + 1));
-            this.pngState.set(id, { status: 'pronto', imagens, at });
-            this.logger.log(`PNG ${id} pronto: ${imagens.length} parte(s) no SQLite (dia ${dia})`);
+            this.salvarResultado(id, buffers);
           } else {
             this.pngState.set(id, { status: 'erro', imagens: [], erro: 'script terminou sem gerar imagens' });
           }

@@ -203,7 +203,7 @@ async def main(categoria: str = "", out_path: Path | None = None):
         _m["last"] = agora
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=not HEADED, args=["--start-maximized"])
+        browser = await pw.chromium.launch(headless=not HEADED, args=q.LAUNCH_ARGS)
         ctx = await browser.new_context(
             viewport={"width": 1600, "height": 1000},
             device_scale_factor=q.DSF,
@@ -213,12 +213,14 @@ async def main(categoria: str = "", out_path: Path | None = None):
         lap("launch+context")
         print("-> abrindo report Títulos Abertos…")
         await page.goto(URL, wait_until="domcontentloaded", timeout=60_000)
+        await q.ensure_logged_in(page)  # loga só se a sessão caiu (ausente/expirada)
         await page.wait_for_selector('[class*="visualContainer"]', timeout=120_000)
         try:
             await page.wait_for_selector("input.date-slicer-datepicker", state="visible", timeout=60_000)
         except Exception:
             print("   (aviso: slicer de data não apareceu no tempo esperado)")
         await asyncio.sleep(1.5)
+        await q.save_session(ctx)  # persiste a sessão (renovada) p/ as próximas execuções
         lap("load")
 
         print("-> TELA 1: período = último dia útil (todas as datas da tela)")
