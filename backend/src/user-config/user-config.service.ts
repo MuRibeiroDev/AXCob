@@ -1,33 +1,22 @@
-/* Configurações por usuário (webhook do Bitrix). Persiste em SQLite. */
+/* Configurações por usuário (webhook do Bitrix). Persiste na coluna
+   webhook_bitrix_deal da Ax_Caixa.users_qitech, via AuthService. */
 import { BadRequestException, Injectable } from '@nestjs/common';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { UserConfigStore } from './user-config.store';
+import { AuthService } from '../auth/auth.service';
 
 @Injectable()
 export class UserConfigService {
-  private store_?: UserConfigStore;
-
-  private repoRoot(): string {
-    const guess = path.resolve(__dirname, '..', '..', '..');
-    if (fs.existsSync(path.join(guess, 'scripts'))) return guess;
-    return path.resolve(process.cwd(), '..');
-  }
-  private store(): UserConfigStore {
-    if (!this.store_) this.store_ = new UserConfigStore(path.join(this.repoRoot(), 'data', 'user-config.db'));
-    return this.store_;
-  }
+  constructor(private readonly auth: AuthService) {}
 
   /** Webhook do Bitrix do usuário (ou null). */
-  webhookDoUsuario(userId: number): string | null {
-    return this.store().getWebhook(userId);
+  webhookDoUsuario(userId: number): Promise<string | null> {
+    return this.auth.webhookDoUsuario(userId);
   }
 
   /** Valida o formato e salva o webhook do usuário. String vazia limpa. */
-  salvarWebhook(userId: number, webhook: string): string | null {
+  async salvarWebhook(userId: number, webhook: string): Promise<string | null> {
     const v = (webhook ?? '').trim().replace(/\/$/, '');
     if (!v) {
-      this.store().setWebhook(userId, null);
+      await this.auth.salvarWebhook(userId, null);
       return null;
     }
     // Formato esperado: https://<conta>.bitrix24.com.br/rest/<id>/<token>
@@ -36,7 +25,7 @@ export class UserConfigService {
         'Webhook inválido. Cole a URL completa, ex.: https://suaconta.bitrix24.com.br/rest/123/token/',
       );
     }
-    this.store().setWebhook(userId, v);
+    await this.auth.salvarWebhook(userId, v);
     return v;
   }
 }

@@ -33,17 +33,17 @@ export class AcoesController {
     return this.bitrix.listarAnalistas();
   }
 
-  /** Webhook do PRÓPRIO usuário logado (configurado em Configurações). */
-  private webhookDoUsuario(req: any): string | null {
+  /** Webhook do PRÓPRIO usuário logado (coluna webhook_bitrix_deal). */
+  private webhookDoUsuario(req: any): Promise<string | null> {
     const userId = Number(req.user?.sub ?? req.user?.id);
-    return Number.isFinite(userId) ? this.cfg.webhookDoUsuario(userId) : null;
+    return Number.isFinite(userId) ? this.cfg.webhookDoUsuario(userId) : Promise.resolve(null);
   }
 
   /** Cria solicitações de protesto (pipeline 116, etapa Solicitações de Protesto). */
   @Post('protestos')
   async protestos(@Req() req: any, @Body() body: CriarBody) {
     const resultados = await this.bitrix.criarSolicitacoes(
-      'protesto', parseItens(body), body?.analistaId ?? null, this.webhookDoUsuario(req),
+      'protesto', parseItens(body), body?.analistaId ?? null, await this.webhookDoUsuario(req),
     );
     return resumo(resultados);
   }
@@ -52,7 +52,7 @@ export class AcoesController {
   @Post('negativacoes')
   async negativacoes(@Req() req: any, @Body() body: CriarBody) {
     const resultados = await this.bitrix.criarSolicitacoes(
-      'negativacao', parseItens(body), body?.analistaId ?? null, this.webhookDoUsuario(req),
+      'negativacao', parseItens(body), body?.analistaId ?? null, await this.webhookDoUsuario(req),
     );
     return resumo(resultados);
   }

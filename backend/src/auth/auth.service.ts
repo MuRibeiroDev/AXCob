@@ -14,7 +14,8 @@ export interface AuthUser {
 }
 
 /** Autenticação contra a tabela COMPARTILHADA Ax_Caixa.users_qitech (banco SMART).
- *  SOMENTE LEITURA — nunca escreve nessa tabela. Senha em bcrypt. */
+ *  Senha em bcrypt. Escreve APENAS nas colunas próprias do AxCob desta tabela
+ *  (contact_phone e webhook_bitrix_deal) — nunca toca no restante. */
 @Injectable()
 export class AuthService implements OnModuleDestroy {
   private readonly logger = new Logger(AuthService.name);
@@ -91,6 +92,24 @@ export class AuthService implements OnModuleDestroy {
       role: u.role,
       phone: phone || null,
     };
+  }
+
+  /** Webhook do Bitrix do usuário (coluna webhook_bitrix_deal), ou null. */
+  async webhookDoUsuario(userId: number): Promise<string | null> {
+    if (!Number.isFinite(userId)) return null;
+    const pool = await this.getPool();
+    const r = await pool.request().input('id', userId)
+      .query('SELECT webhook_bitrix_deal FROM Ax_Caixa.users_qitech WHERE id = @id');
+    const w = r.recordset[0]?.webhook_bitrix_deal;
+    return (w && String(w).trim()) || null;
+  }
+
+  /** Grava (ou limpa, com null) o webhook do Bitrix do usuário. */
+  async salvarWebhook(userId: number, webhook: string | null): Promise<void> {
+    if (!Number.isFinite(userId)) return;
+    const pool = await this.getPool();
+    await pool.request().input('id', userId).input('w', webhook || null)
+      .query('UPDATE Ax_Caixa.users_qitech SET webhook_bitrix_deal = @w WHERE id = @id');
   }
 
   async onModuleDestroy(): Promise<void> {

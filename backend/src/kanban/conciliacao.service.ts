@@ -165,7 +165,10 @@ export class ConciliacaoService {
     return path.resolve(process.cwd(), '..');
   }
   private store(): PixConciliacaoStore {
-    if (!this.store_) this.store_ = new PixConciliacaoStore(path.join(this.repoRoot(), 'data', 'pix-conciliacao.db'));
+    if (!this.store_) {
+      const base = process.env.DATA_DIR?.trim() || path.join(this.repoRoot(), 'data');
+      this.store_ = new PixConciliacaoStore(path.join(base, 'pix-conciliacao.db'));
+    }
     return this.store_;
   }
 
