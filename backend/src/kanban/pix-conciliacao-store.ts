@@ -1,11 +1,7 @@
-/* Persiste o resultado da conciliação de PIX por card (SQLite), para a tela
-   manter a resposta salva e só rechamar a IA quando o usuário pedir. */
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-
-// node:sqlite é experimental — require evita depender da tipagem do @types/node.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { DatabaseSync } = require('node:sqlite');
+/* Persiste o resultado da conciliação de PIX por card no SQL Server (schema axcob),
+   para a tela manter a resposta salva e só rechamar a IA quando o usuário pedir.
+   Tabela: axcob.pix_conciliacao (card_id, titulo, resultado JSON, criado_em). */
+import { DatabaseService } from '../database/database.service';
 
 export interface ConciliacaoSalva {
   cardId: string;
@@ -15,41 +11,35 @@ export interface ConciliacaoSalva {
 }
 
 export class PixConciliacaoStore {
-  private readonly db: any;
+  constructor(private readonly db: DatabaseService) {}
 
-  constructor(dbPath: string) {
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    this.db = new DatabaseSync(dbPath);
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS pix_conciliacao (
-        card_id   TEXT PRIMARY KEY,
-        titulo    TEXT NOT NULL,
-        resultado TEXT NOT NULL,
-        criado_em TEXT NOT NULL
-      )`);
-  }
-
-  /** Salva/atualiza o resultado (JSON) de um card. */
-  salvar(cardId: string, titulo: string, resultado: unknown): string {
+  /** Salva/atualiza o resultado (JSON) de um card (upsert por card_id). */
+  async salvar(cardId: string, titulo: string, resultado: unknown): Promise<string> {
     const criadoEm = new Date().toISOString();
-    this.db.prepare(
-      `INSERT INTO pix_conciliacao (card_id, titulo, resultado, criado_em) VALUES (?, ?, ?, ?)
-       ON CONFLICT(card_id) DO UPDATE SET titulo=excluded.titulo, resultado=excluded.resultado, criado_em=excluded.criado_em`,
-    ).run(cardId, titulo, JSON.stringify(resultado), criadoEm);
+    await this.db.query(
+      `MERGE axcob.pix_conciliacao AS t
+       USING (SELECT @card AS card_id) AS s ON t.card_id = s.card_id
+       WHEN MATCHED THEN UPDATE SET titulo = @titulo, resultado = @resultado, criado_em = @criado
+       WHEN NOT MATCHED THEN INSERT (card_id, titulo, resultado, criado_em)
+         VALUES (@card, @titulo, @resultado, @criado);`,
+      { card: cardId, titulo, resultado: JSON.stringify(resultado), criado: criadoEm },
+    );
     return criadoEm;
   }
 
   /** Resultado salvo de um card (ou null). */
-  buscar(cardId: string): ConciliacaoSalva | null {
-    const r = this.db.prepare('SELECT card_id, titulo, resultado, criado_em FROM pix_conciliacao WHERE card_id = ?').get(cardId);
-    if (!r) return null;
-    return { cardId: r.card_id, titulo: r.titulo, resultado: this.parse(r.resultado), criadoEm: r.criado_em };
+  async buscar(cardId: string): Promise<ConciliacaoSalva | null> {
+    const r = await this.db.query<{ card_id: string; titulo: string; resultado: string; criado_em: string }>(
+      'SELECT card_id, titulo, resultado, criado_em FROM axcob.pix_conciliacao WHERE card_id = @card', { card: cardId });
+    if (!r[0]) return null;
+    return { cardId: r[0].card_id, titulo: r[0].titulo, resultado: this.parse(r[0].resultado), criadoEm: r[0].criado_em };
   }
 
   /** Todos os resultados salvos (para a tela carregar de uma vez). */
-  todos(): ConciliacaoSalva[] {
-    const rows = this.db.prepare('SELECT card_id, titulo, resultado, criado_em FROM pix_conciliacao').all();
-    return rows.map((r: any) => ({ cardId: r.card_id, titulo: r.titulo, resultado: this.parse(r.resultado), criadoEm: r.criado_em }));
+  async todos(): Promise<ConciliacaoSalva[]> {
+    const rows = await this.db.query<{ card_id: string; titulo: string; resultado: string; criado_em: string }>(
+      'SELECT card_id, titulo, resultado, criado_em FROM axcob.pix_conciliacao');
+    return rows.map((r) => ({ cardId: r.card_id, titulo: r.titulo, resultado: this.parse(r.resultado), criadoEm: r.criado_em }));
   }
 
   private parse(s: string): unknown {

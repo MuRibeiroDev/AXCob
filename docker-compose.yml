@@ -24,13 +24,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
-      DATA_DIR: /app/data       # SQLite (conciliação PIX + relatórios) gravável + persistido
       REPORT_WORKER_URL: http://worker:8500   # delega a geração de PNG ao worker
       REL_MAX_CONCURRENT: "2"   # nº de capturas simultâneas (Chromium é pesado)
     expose:
       - "3000"                  # exposto SÓ na rede interna (não publicado no host)
-    volumes:
-      - axcob-data:/app/data    # persiste o banco entre rebuilds/down
     depends_on:
       worker:
         condition: service_healthy
@@ -110,7 +107,5 @@ networks:
 
 # ─────────────────────────── Volumes ───────────────────────────
 volumes:
-  axcob-data:
-    name: axcob-data
   axcob-session:
     name: axcob-session

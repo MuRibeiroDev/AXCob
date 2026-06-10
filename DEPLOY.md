@@ -6,9 +6,12 @@ Sobe a stack na porta **2555** (frontend nginx serve o SPA e proxia `/api`):
 [browser] →:2555→ [frontend nginx]  ─/────→ SPA estático
                         └─/api──────→ [backend NestJS] ──HTTP /run──→ [worker Playwright]
                                            │                                 │
-                                      axcob-data                       axcob-session
-                                      (SQLite)                         (sessão Power BI)
+                                     Azure SQL                         axcob-session
+                                  (schema axcob)                       (sessão Power BI)
 ```
+
+> Relatórios (PNG) e conciliação PIX são persistidos no **Azure SQL** (schema `axcob`),
+> não em SQLite local. O único volume é `axcob-session` (sessão do Power BI no worker).
 
 ## Pré-requisitos no servidor
 
@@ -66,15 +69,19 @@ docker compose logs -f worker     # geração de PNG / login Power BI
 docker compose ps                 # status + health
 docker compose up -d --build      # rebuild após pull
 docker compose down               # derruba (mantém volumes/dados)
-docker compose down -v            # derruba E APAGA volumes (perde SQLite e sessão PBI)
+docker compose down -v            # derruba E APAGA volumes (perde a sessão do Power BI)
 ```
 
-## Dados persistentes (volumes)
+## Persistência
 
-- **`axcob-data`** → `/app/data` no backend: SQLite da conciliação PIX e dos relatórios.
-- **`axcob-session`** → `/app/session` no worker: sessão do Power BI.
+- **Relatórios (PNG) e conciliação PIX** → **Azure SQL**, schema `axcob`
+  (tabelas `axcob.relatorio_png` e `axcob.pix_conciliacao`). Nada em disco local.
+- **`axcob-session`** (volume) → `/app/session` no worker: sessão do Power BI.
+  Sobrevive a `down`/rebuild; só some com `docker compose down -v`.
 
-Sobrevivem a `down`/rebuild. Só são apagados com `docker compose down -v`.
+> O schema/tabelas em `axcob` precisam existir no banco. SQL em
+> [backend/scripts/axcob-schema.sql](backend/scripts/axcob-schema.sql) (rodar como DBA),
+> ou via `node backend/scripts/create-axcob-schema.cjs` com um usuário que tenha DDL.
 
 ## Atualizar uma versão já no ar
 

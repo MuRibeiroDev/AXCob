@@ -61,13 +61,13 @@ export class RelatoriosController {
 
   /** Serve uma imagem gerada (do SQLite) por id + parte. ?download=1 força download. */
   @Get('imagem/:id/:parte')
-  imagem(
+  async imagem(
     @Param('id') id: string,
     @Param('parte') parte: string,
     @Query('download') download: string,
     @Res() res: Response,
   ) {
-    const buf = this.service.imagemBlob(id, Number(parte));
+    const buf = await this.service.imagemBlob(id, Number(parte));
     if (download === '1' || download === 'true') {
       res.setHeader('Content-Disposition', `attachment; filename="${id}_${parte}.png"`);
     }

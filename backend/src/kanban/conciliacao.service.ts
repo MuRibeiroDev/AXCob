@@ -1,7 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { DatabaseService } from '../database/database.service';
 import { PixConciliacaoStore, type ConciliacaoSalva } from './pix-conciliacao-store';
 
@@ -159,21 +157,13 @@ export class ConciliacaoService {
   private store_?: PixConciliacaoStore;
   constructor(private readonly db: DatabaseService, private readonly config: ConfigService) {}
 
-  private repoRoot(): string {
-    const guess = path.resolve(__dirname, '..', '..', '..');
-    if (fs.existsSync(path.join(guess, 'scripts'))) return guess;
-    return path.resolve(process.cwd(), '..');
-  }
   private store(): PixConciliacaoStore {
-    if (!this.store_) {
-      const base = process.env.DATA_DIR?.trim() || path.join(this.repoRoot(), 'data');
-      this.store_ = new PixConciliacaoStore(path.join(base, 'pix-conciliacao.db'));
-    }
+    if (!this.store_) this.store_ = new PixConciliacaoStore(this.db);
     return this.store_;
   }
 
   /** Todos os resultados salvos (para a tela carregar de uma vez). */
-  salvas(): ConciliacaoSalva[] {
+  salvas(): Promise<ConciliacaoSalva[]> {
     return this.store().todos();
   }
 
@@ -186,14 +176,14 @@ export class ConciliacaoService {
   ): Promise<ConciliacaoResultado> {
     const { cardId, refresh } = opts;
     if (cardId && !refresh) {
-      const salvo = this.store().buscar(cardId);
+      const salvo = await this.store().buscar(cardId);
       if (salvo) {
         this.logger.log(`pix ${cardId}: cache hit`);
         return { ...(salvo.resultado as ConciliacaoResultado), criado_em: salvo.criadoEm, cacheado: true };
       }
     }
     const resultado = await this.analisarPix(titulo, docInformado);
-    if (cardId) resultado.criado_em = this.store().salvar(cardId, titulo, resultado);
+    if (cardId) resultado.criado_em = await this.store().salvar(cardId, titulo, resultado);
     return resultado;
   }
 

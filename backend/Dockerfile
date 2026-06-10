@@ -31,10 +31,6 @@ COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
 
-# Diretório de dados (SQLite da conciliação PIX). Criado com dono "node" para que,
-# ao montar um volume vazio aqui, o Docker herde essa permissão (senão fica root).
-RUN mkdir -p /app/data && chown -R node:node /app/data
-
 USER node
 EXPOSE 3000
 

@@ -115,11 +115,11 @@ export class RelatoriosService {
     const faltando: string[] = [];
     for (const item of RelatoriosService.SEQUENCIA) {
       if (item.tipo === 'png') {
-        const n = this.store().partes(item.id, dia);
+        const n = await this.store().partes(item.id, dia);
         if (n === 0) { faltando.push(item.legenda); continue; }
         acoes.push({ kind: 'text', label: `${item.legenda} (texto)`, text: `*${item.legenda}*` });
         for (let parte = 1; parte <= n; parte++) {
-          const buf = this.store().ler(item.id, parte);
+          const buf = await this.store().ler(item.id, parte);
           if (buf) acoes.push({ kind: 'media', label: `${item.legenda} (img ${parte})`, base64: buf.toString('base64'), fileName: `${item.id}_${parte}.png` });
         }
       } else {
@@ -237,12 +237,9 @@ export class RelatoriosService {
   private scriptsDir(): string {
     return path.join(this.repoRoot(), 'scripts');
   }
-  /** Store SQLite dos PNGs (lazy). */
+  /** Store dos PNGs no SQL Server (schema axcob), lazy. */
   private store(): RelatorioStore {
-    if (!this.store_) {
-      const base = process.env.DATA_DIR?.trim() || path.join(this.repoRoot(), 'data');
-      this.store_ = new RelatorioStore(path.join(base, 'relatorios.db'));
-    }
+    if (!this.store_) this.store_ = new RelatorioStore(this.db);
     return this.store_;
   }
   /** Dia corrente (local) yyyy-mm-dd — chave do "somente do dia". */
@@ -289,13 +286,13 @@ export class RelatoriosService {
     return workerUrl ? this.runPngViaWorker(id, job, workerUrl) : this.runPngLocal(id, job);
   }
 
-  /** Persiste os PNGs gerados (buffers) no SQLite e marca o estado como pronto. */
-  private salvarResultado(id: string, buffers: Buffer[]): void {
+  /** Persiste os PNGs gerados (buffers) no SQL Server e marca o estado como pronto. */
+  private async salvarResultado(id: string, buffers: Buffer[]): Promise<void> {
     const dia = this.hoje();
-    const at = this.store().salvar(id, dia, buffers);
+    const at = await this.store().salvar(id, dia, buffers);
     const imagens = buffers.map((_b, i) => String(i + 1));
     this.pngState.set(id, { status: 'pronto', imagens, at });
-    this.logger.log(`PNG ${id} pronto: ${imagens.length} parte(s) no SQLite (dia ${dia})`);
+    this.logger.log(`PNG ${id} pronto: ${imagens.length} parte(s) no banco (dia ${dia})`);
   }
 
   /** Gera o PNG chamando o worker (Playwright) por HTTP; recebe as partes em base64. */
@@ -324,7 +321,7 @@ export class RelatoriosService {
         this.pngState.set(id, { status: 'erro', imagens: [], erro: `falha na geração (${motivo})` });
         return;
       }
-      this.salvarResultado(id, data.images.map((b64) => Buffer.from(b64, 'base64')));
+      await this.salvarResultado(id, data.images.map((b64) => Buffer.from(b64, 'base64')));
     } catch (err) {
       const msg = (err as Error)?.name === 'AbortError' ? `timeout (${timeoutMs}ms)` : (err as Error)?.message ?? String(err);
       this.logger.error(`PNG ${id} (worker) erro: ${msg}`);
@@ -352,7 +349,7 @@ export class RelatoriosService {
         this.pngState.set(id, { status: 'erro', imagens: [], erro: err.message });
         resolve();
       });
-      proc.on('close', (code) => {
+      proc.on('close', async (code) => {
         if (code === 0) {
           // descobre as partes geradas: <outBase>_<N>.png (nº de partes é adaptativo)
           const re = new RegExp(`^${job.outBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_(\\d+)\\.png$`);
@@ -362,10 +359,15 @@ export class RelatoriosService {
             .sort((a, b) => a.n - b.n)
             .map((x) => path.join(this.scriptsDir(), x.f));
           if (arquivos.length) {
-            // guarda no SQLite (só do dia; substitui o anterior) e remove os arquivos
+            // guarda no banco (só do dia; substitui o anterior) e remove os arquivos
             const buffers = arquivos.map((p) => fs.readFileSync(p));
             for (const p of arquivos) { try { fs.unlinkSync(p); } catch { /* ignora */ } }
-            this.salvarResultado(id, buffers);
+            try {
+              await this.salvarResultado(id, buffers);
+            } catch (e) {
+              this.logger.error(`PNG ${id} falhou ao salvar no banco: ${(e as Error).message}`);
+              this.pngState.set(id, { status: 'erro', imagens: [], erro: 'falha ao salvar no banco' });
+            }
           } else {
             this.pngState.set(id, { status: 'erro', imagens: [], erro: 'script terminou sem gerar imagens' });
           }
@@ -378,23 +380,23 @@ export class RelatoriosService {
     });
   }
 
-  statusPng(id: string): PngState {
+  async statusPng(id: string): Promise<PngState> {
     const mem = this.pngState.get(id);
     if (mem?.status === 'gerando') return mem;
-    // reflete o SQLite (sobrevive a restart; só conta o dia corrente)
+    // reflete o banco (sobrevive a restart; só conta o dia corrente)
     const dia = this.hoje();
-    const n = this.store().partes(id, dia);
+    const n = await this.store().partes(id, dia);
     if (n > 0) {
-      return { status: 'pronto', imagens: Array.from({ length: n }, (_v, i) => String(i + 1)), at: this.store().geradoEm(id, dia) ?? undefined };
+      return { status: 'pronto', imagens: Array.from({ length: n }, (_v, i) => String(i + 1)), at: (await this.store().geradoEm(id, dia)) ?? undefined };
     }
     return mem ?? { status: 'idle', imagens: [] };
   }
 
-  /** PNG (Buffer) de uma parte de um relatório, lido do SQLite. */
-  imagemBlob(id: string, parte: number): Buffer {
+  /** PNG (Buffer) de uma parte de um relatório, lido do banco. */
+  async imagemBlob(id: string, parte: number): Promise<Buffer> {
     if (!/^[a-z0-9_]+$/.test(id)) throw new BadRequestException('id inválido');
     if (!Number.isInteger(parte) || parte < 1) throw new BadRequestException('parte inválida');
-    const buf = this.store().ler(id, parte);
+    const buf = await this.store().ler(id, parte);
     if (!buf) throw new NotFoundException('imagem não encontrada');
     return buf;
   }
