@@ -1,7 +1,7 @@
 /* Cria o schema `axcob` e as tabelas que hoje vivem no SQLite local, no Azure SQL.
    Espelha relatorio_png (relatorios.db) e pix_conciliacao (pix-conciliacao.db).
    Uso:  node backend/scripts/create-axcob-schema.cjs
-   Tenta DB_USER/DB_PASSWORD; se faltar permissão de DDL, tenta DB_USER2/DB_PASSWORD2. */
+   Usa DB_USER/DB_PASSWORD do .env (precisa de permissão de DDL). */
 const fs = require('node:fs');
 const path = require('node:path');
 const sql = require('mssql');
@@ -80,11 +80,9 @@ async function tentar(user, password, rotulo) {
 }
 
 (async () => {
-  const ok =
-    (await tentar(process.env.DB_USER, process.env.DB_PASSWORD, 'DB_USER')) ||
-    (await tentar(process.env.DB_USER2, process.env.DB_PASSWORD2, 'DB_USER2'));
+  const ok = await tentar(process.env.DB_USER, process.env.DB_PASSWORD, 'DB_USER');
   if (!ok) {
-    console.error('\nNão consegui criar o schema/tabelas com nenhum usuário. ' +
+    console.error('\nNão consegui criar o schema/tabelas. ' +
       'Verifique permissão de DDL (CREATE SCHEMA/CREATE TABLE) e o firewall do Azure SQL p/ este IP.');
     process.exit(1);
   }
