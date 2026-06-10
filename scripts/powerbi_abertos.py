@@ -270,6 +270,10 @@ async def main(categoria: str = "", out_path: Path | None = None):
         await set_all_date_ranges(page, di, df, "revalida")
         lap("revalida datas")
 
+        print("-> ordenar tabela por VALOR ABERTO (desc)")
+        await q.ordenar_desc(page, "VALOR ABERTO")
+        await asyncio.sleep(1.2)
+
         print("-> passo final: print (tabela inteira, limpo)")
         await q.capturar_limpo(page, out_path)
         lap("capturar_limpo")

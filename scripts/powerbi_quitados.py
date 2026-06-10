@@ -183,6 +183,51 @@ async def save_session(ctx) -> None:
         print(f"   (aviso: não consegui salvar a sessão: {e})")
 
 
+async def ordenar_desc(page, coluna: str, *, max_clicks: int = 3) -> bool:
+    """Ordena a tabela do BI pela coluna `coluna` em ordem DECRESCENTE.
+    Clica no cabeçalho (role=columnheader) e usa aria-sort p/ garantir 'descending'.
+    Reposiciona a cada clique (o cabeçalho re-renderiza)."""
+    alvo = " ".join(coluna.split()).upper()
+
+    async def estado():
+        return await page.evaluate(
+            """(alvo) => {
+                const norm = s => (s||'').replace(/\\s+/g,' ').trim().toUpperCase();
+                for (const h of document.querySelectorAll('[role=columnheader]')) {
+                    if (norm(h.innerText).includes(alvo)) {
+                        const r = h.getBoundingClientRect();
+                        if (r.width <= 0 || r.height <= 0) continue;
+                        return { found: true, sort: (h.getAttribute('aria-sort') || 'none'),
+                                 x: Math.round(r.x + r.width / 2),
+                                 y: Math.round(r.y + Math.min(r.height / 2, 12)) };
+                    }
+                }
+                return { found: false };
+            }""",
+            alvo,
+        )
+
+    info = await estado()
+    if not info["found"]:
+        print(f"   [ordenar] cabeçalho {coluna!r} não encontrado — mantém ordem do BI")
+        return False
+    for _ in range(max_clicks):
+        if info.get("sort") == "descending":
+            print(f"   [ordenar] {coluna} = decrescente OK")
+            return True
+        print(f"   [ordenar] clicando {coluna!r} (sort atual={info.get('sort')})")
+        await page.mouse.click(info["x"], info["y"])
+        await asyncio.sleep(1.4)
+        info = await estado()
+        if not info["found"]:
+            await asyncio.sleep(0.8)
+            info = await estado()
+            if not info["found"]:
+                return False
+    print(f"   [ordenar] {coluna} sort final={info.get('sort')}")
+    return info.get("sort") == "descending"
+
+
 try:
     import holidays as _holidays
 except Exception:
@@ -894,6 +939,10 @@ async def main(categoria: str = "", out_path: Path | None = None):
         await select_categoria(page, categoria)
         await asyncio.sleep(2)
         lap("select categoria final")
+
+        print("-> ordenar tabela por VALOR TOTAL (desc)")
+        await ordenar_desc(page, "VALOR TOTAL")
+        await asyncio.sleep(1.2)
 
         print("-> passo 6: print final (limpo, tabela inteira)")
         await capturar_limpo(page, out_path)  # select_categoria já aguardou o settle
