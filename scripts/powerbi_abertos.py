@@ -133,12 +133,19 @@ async def selecionar_tipo_titulo(page, excluir):
             optloc = popup.get_by_role("option")
             acao = "marcar" if not o["checked"] else "desmarcar"
             print(f"   [Tipo] {acao} {o['text']!r}")
+            # Ctrl+clique: o slicer está em multi-seleção com CTRL — clique simples
+            # selecionaria SÓ este item (limpando os demais) e o filtro nunca convergiria.
             try:
                 await optloc.nth(i).scroll_into_view_if_needed(timeout=2500)
-                await optloc.nth(i).click(timeout=3000)
+                await optloc.nth(i).click(timeout=3000, modifiers=["Control"])
             except Exception:
-                try: await page.mouse.click(o["x"], o["y"])
-                except Exception: pass
+                try:
+                    await page.keyboard.down("Control")
+                    await page.mouse.click(o["x"], o["y"])
+                    await page.keyboard.up("Control")
+                except Exception:
+                    try: await page.keyboard.up("Control")
+                    except Exception: pass
             await asyncio.sleep(0.9)
             continue  # re-lê a mesma janela
         # janela toda correta → registra e rola p/ baixo
