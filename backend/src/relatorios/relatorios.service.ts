@@ -31,21 +31,21 @@ const PNG_JOBS: Record<string, { script: string; args: string[]; outBase: string
     outBase: 'print_quitados_estruturada',
   },
   titulos_abertos_geral: {
-    script: 'powerbi_abertos.py', args: [], outBase: 'print_abertos',
+    script: 'powerbi_abertos.py', args: ['--dump-cedentes'], outBase: 'print_abertos',
   },
   titulos_abertos_agro: {
     script: 'powerbi_abertos.py',
-    args: ['--categoria', 'AGRO', '--out', 'print_abertos_agro.png'],
+    args: ['--categoria', 'AGRO', '--out', 'print_abertos_agro.png', '--dump-cedentes'],
     outBase: 'print_abertos_agro',
   },
   titulos_abertos_industria: {
     script: 'powerbi_abertos.py',
-    args: ['--categoria', 'INDUSTRIA', '--out', 'print_abertos_industria.png'],
+    args: ['--categoria', 'INDUSTRIA', '--out', 'print_abertos_industria.png', '--dump-cedentes'],
     outBase: 'print_abertos_industria',
   },
   titulos_abertos_estruturada: {
     script: 'powerbi_abertos.py',
-    args: ['--categoria', 'ESTRUTURADA', '--out', 'print_abertos_estruturada.png'],
+    args: ['--categoria', 'ESTRUTURADA', '--out', 'print_abertos_estruturada.png', '--dump-cedentes'],
     outBase: 'print_abertos_estruturada',
   },
 };
@@ -331,6 +331,131 @@ export class RelatoriosService {
     }
   }
 
+  /** Extrai a lista de cedentes do stdout do script (bloco do --dump-cedentes). */
+  private extrairCedentes(stdout: string): string[] {
+    if (!stdout) return [];
+    const linhas = stdout.split(/\r?\n/);
+    const ini = linhas.findIndex((l) => /=+\s*CEDENTES\s*\(/i.test(l));
+    if (ini < 0) return [];
+    const nomes: string[] = [];
+    for (let i = ini + 1; i < linhas.length; i++) {
+      if (/^\s*=+\s*$/.test(linhas[i])) break; // linha de "====" fecha o bloco
+      const m = linhas[i].match(/^\s*\d+\.\s+(.*\S)\s*$/);
+      if (m) nomes.push(m[1]);
+    }
+    return nomes;
+  }
+
+  /** Se o script rodou com --dump-cedentes, loga a lista extraída do stdout. */
+  private logarCedentes(id: string, nomes: string[]): void {
+    if (nomes.length) {
+      this.logger.log(`CEDENTES ${id} (${nomes.length}): ${nomes.join(' | ')}`);
+    }
+  }
+
+  /** Pagamento PARCIAL: título vencido (vw_titulos_abertos) dos cedentes do
+   *  relatório que TAMBÉM tem registro em vw_titulos_quitados (parte já paga).
+   *  Mesma manha do kanban (quitado_parcial), no sentido inverso. Saída: log +
+   *  scripts/<outBase>.parciais.txt. Nunca derruba a geração do PNG. */
+  // Tipos de título considerados na análise de pagamento parcial (whitelist).
+  private static readonly TIPOS_PARCIAL = "'CCB','CHQ','CTR','DMR','DSR','NCO','NPP','CPR'";
+
+  private async analisarParciais(id: string, outBase: string, cedentes: string[]): Promise<void> {
+    try {
+      if (!cedentes.length) return;
+      const digitos = (c: string) => `REPLACE(REPLACE(REPLACE(REPLACE(${c},'.',''),'/',''),'-',''),' ','')`;
+      const tipos = RelatoriosService.TIPOS_PARCIAL;
+
+      // 1) títulos vencidos dos cedentes (mesmos filtros do relatório), em lotes
+      interface Aberto { DOCUMENTO: string; CEDENTE: string; SACADO: string | null; DOC_SACADO: string | null; DOC_CEDENTE: string | null; SISTEMA: string | null; VALOR: number; TOTAL: number; VENCIMENTO: Date | string }
+      const abertos: Aberto[] = [];
+      for (let i = 0; i < cedentes.length; i += 200) {
+        const lote = cedentes.slice(i, i + 200).map((n) => n.trim().toUpperCase());
+        const params: Record<string, unknown> = {};
+        const marks = lote.map((n, j) => { params[`c${j}`] = n; return `@c${j}`; });
+        abertos.push(...await this.db.query<Aberto>(`
+          SELECT DOCUMENTO, CEDENTE, SACADO, ${digitos('CPF_CNPJ_SACADO')} AS DOC_SACADO,
+                 ${digitos('CPF_CNPJ_CEDENTE')} AS DOC_CEDENTE, SISTEMA,
+                 CAST(VALOR AS float) AS VALOR, CAST(TOTAL AS float) AS TOTAL, VENCIMENTO
+          FROM data_core.vw_titulos_abertos
+          WHERE VENCIMENTO < CAST(GETDATE() AS DATE)
+            AND M = 'C'
+            AND TIPO IN (${tipos})
+            AND UPPER(LTRIM(RTRIM(CEDENTE))) IN (${marks.join(',')})`, params));
+      }
+      if (!abertos.length) {
+        this.logger.log(`PARCIAIS ${id}: nenhum título vencido dos cedentes do relatório`);
+        return;
+      }
+
+      // 2) cruza com quitados (lotes de DOCUMENTO). Match ESTRITO por número +
+      //    CNPJ do cedente + CNPJ do sacado + SISTEMA — números se repetem entre
+      //    operações/sacados (falso parcial) e quitação em OUTRO veículo
+      //    (ex.: FIDC→Securitizadora) é rolagem/renegociação, não parcial.
+      interface Quitado { NUMERO: string; DOC_SACADO: string | null; DOC_CEDENTE: string | null; SISTEMA: string | null; VALOR_FACE: number | null; LIQUIDADO: number | null; QUITACAO: Date | string | null }
+      const chave = (numero: string, docCed: string | null | undefined, docSac: string | null | undefined, sistema: string | null | undefined) =>
+        `${numero}|${docCed ?? ''}|${docSac ?? ''}|${(sistema ?? '').trim().toUpperCase()}`;
+      const docs = [...new Set(abertos.map((a) => (a.DOCUMENTO ?? '').trim()).filter(Boolean))];
+      const quitIdx = new Map<string, Quitado>(); // chave: numero|cnpjCedente|cnpjSacado|sistema
+      for (let i = 0; i < docs.length; i += 500) {
+        const lote = docs.slice(i, i + 500);
+        const params: Record<string, unknown> = {};
+        const marks = lote.map((n, j) => { params[`n${j}`] = n; return `@n${j}`; });
+        const rows = await this.db.query<Quitado>(`
+          SELECT NUMERO, ${digitos('CPF_CNPJ_SACADO')} AS DOC_SACADO,
+                 ${digitos('CPF_CNPJ_CEDENTE')} AS DOC_CEDENTE, SISTEMA,
+                 CAST(VALOR_FACE AS float) AS VALOR_FACE, CAST(LIQUIDADO AS float) AS LIQUIDADO, QUITACAO
+          FROM data_core.vw_titulos_quitados
+          WHERE TIPO IN (${tipos})
+            AND NUMERO IN (${marks.join(',')})`, params);
+        for (const r of rows) {
+          const n = (r.NUMERO ?? '').trim();
+          if (!n) continue;
+          quitIdx.set(chave(n, r.DOC_CEDENTE, r.DOC_SACADO, r.SISTEMA), r);
+        }
+      }
+
+      // 3) agrega por cedente: TOTAL VENCIDO = soma da face em aberto; TOTAL
+      //    QUITADO = soma do LIQUIDADO dos títulos com match em quitados
+      //    (dedupe por registro de quitação — várias linhas em aberto do mesmo
+      //    título não podem contar o mesmo liquidado 2x).
+      const porCed = new Map<string, { vencido: number; quitado: number; chavesQuit: Set<string> }>();
+      for (const a of abertos) {
+        const ced = (a.CEDENTE ?? '').trim();
+        const agg = porCed.get(ced) ?? { vencido: 0, quitado: 0, chavesQuit: new Set<string>() };
+        agg.vencido += Number(a.VALOR) || 0;
+        const n = (a.DOCUMENTO ?? '').trim();
+        const k = chave(n, a.DOC_CEDENTE, a.DOC_SACADO, a.SISTEMA);
+        if (quitIdx.has(k) && !agg.chavesQuit.has(k)) {
+          agg.chavesQuit.add(k);
+          agg.quitado += Number(quitIdx.get(k)?.LIQUIDADO) || 0;
+        }
+        porCed.set(ced, agg);
+      }
+
+      const comParcial = [...porCed.entries()].filter(([, v]) => v.quitado > 0);
+      if (!comParcial.length) {
+        this.logger.log(`PARCIAIS ${id}: nenhum pagamento parcial detectado (${abertos.length} títulos checados)`);
+        return;
+      }
+
+      // formato pedido: CEDENTE - TOTAL VENCIDO: VALOR - TOTAL QUITADO: VALOR
+      const linhas = comParcial
+        .sort((x, y) => y[1].vencido - x[1].vencido)
+        .map(([ced, v]) => `${ced} - TOTAL VENCIDO: ${this.fmtBRL(v.vencido)} - TOTAL QUITADO: ${this.fmtBRL(v.quitado)}`);
+      this.logger.log(`PARCIAIS ${id} (${comParcial.length} cedente(s)):\n${linhas.join('\n')}`);
+      try {
+        const txt = path.join(this.scriptsDir(), `${outBase}.parciais.txt`);
+        fs.writeFileSync(txt, linhas.join('\n'), 'utf8');
+        this.logger.log(`PARCIAIS ${id}: detalhes salvos em ${txt}`);
+      } catch (e) {
+        this.logger.warn(`PARCIAIS ${id}: falha ao salvar txt: ${(e as Error).message}`);
+      }
+    } catch (e) {
+      this.logger.warn(`PARCIAIS ${id}: análise falhou: ${(e as Error).message}`);
+    }
+  }
+
   /** Gera o PNG executando o script Python localmente (fallback p/ dev). */
   private runPngLocal(id: string, job: { script: string; args: string[]; outBase: string }): Promise<void> {
     return new Promise<void>((resolve) => {
@@ -343,13 +468,21 @@ export class RelatoriosService {
         windowsHide: true,
       });
       let stderr = '';
+      let stdout = '';
       proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+      proc.stdout?.on('data', (d) => { stdout += d.toString(); });
       proc.on('error', (err) => {
         this.logger.error(`PNG ${id} falhou ao iniciar: ${err.message}`);
         this.pngState.set(id, { status: 'erro', imagens: [], erro: err.message });
         resolve();
       });
       proc.on('close', async (code) => {
+        const cedentes = this.extrairCedentes(stdout); // do --dump-cedentes (se houver)
+        this.logarCedentes(id, cedentes);
+        if (code === 0 && id === 'titulos_abertos_geral' && cedentes.length) {
+          // análise de pagamento parcial (fire-and-forget; não atrasa o salvar do PNG)
+          void this.analisarParciais(id, job.outBase, cedentes);
+        }
         if (code === 0) {
           // descobre as partes geradas: <outBase>_<N>.png (nº de partes é adaptativo)
           const re = new RegExp(`^${job.outBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_(\\d+)\\.png$`);

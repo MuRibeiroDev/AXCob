@@ -40,6 +40,10 @@ npm-debug.log*
 .pw-profile/
 scripts/.powerbi_session.json
 scripts/*.png
+# saídas de runtime dos relatórios (cedentes/pagamentos parciais — dados de clientes)
+scripts/*.cedentes.txt
+scripts/*.parciais.txt
+scripts/parciais_numeros.txt
 
 # Banco SQLite dos PNGs de relatório (gerado em runtime)
 data/

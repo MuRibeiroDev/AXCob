@@ -192,7 +192,64 @@ async def set_categorias(page, valor):
     await q.fechar_dropdowns(page)
 
 
-async def main(categoria: str = "", out_path: Path | None = None):
+# --- Extração da coluna CEDENTE (opcional, --dump-cedentes) -------------------
+# CEDENTE é a 1ª coluna CONGELADA do visual de tabela → role="rowheader" (1 por
+# linha). Rola a tabela (virtualizada) e acumula por aria-rowindex.
+_CEDENTES_JS = r"""() => {
+    const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+    let grids = [...document.querySelectorAll('[role="grid"],[role="treegrid"]')];
+    let grid = null, best = -1;
+    for (const g of grids) { const n = g.querySelectorAll('[role="gridcell"]').length; if (n > best) { best = n; grid = g; } }
+    if (!grid || best <= 0) return { error: 'tabela não encontrada' };
+    const rowcount = grid.getAttribute('aria-rowcount');
+    const rows = {};
+    for (const c of grid.querySelectorAll('[role="rowheader"]')) {
+        const row = c.closest('[role="row"]');
+        const ri = row && row.getAttribute('aria-rowindex');
+        const txt = norm(c.innerText);
+        if (ri && txt) rows[ri] = txt;
+    }
+    const r = grid.getBoundingClientRect();
+    return { rowcount, rows, box: { x: r.x + r.width / 2, y: r.y + r.height / 2 } };
+}"""
+
+
+async def extrair_cedentes(page):
+    """Lê a coluna CEDENTE da tabela JÁ FILTRADA (mesmo estado do print), rolando
+    o visual. Devolve a lista única, na ordem da tabela, sem a linha de Total."""
+    acc: dict[int, str] = {}
+    estavel = 0
+    for _ in range(400):
+        res = await page.evaluate(_CEDENTES_JS)
+        if res.get("error"):
+            print(f"   [cedentes] {res['error']}")
+            break
+        rowcount = res.get("rowcount")
+        antes = len(acc)
+        for ri, txt in res["rows"].items():
+            acc[int(ri)] = txt
+        ganho = len(acc) - antes
+        if rowcount and len(acc) >= int(rowcount):
+            break
+        estavel = estavel + 1 if ganho == 0 else 0
+        if estavel >= 3:
+            break
+        await page.mouse.move(res["box"]["x"], res["box"]["y"])
+        await page.mouse.wheel(0, 650)
+        await asyncio.sleep(0.6)
+    ignorar = {"total", "totais", "total geral"}
+    vistos, unicos = set(), []
+    for k in sorted(acc.keys()):
+        v = acc[k]
+        if v.strip().lower() in ignorar:
+            continue
+        if v not in vistos:
+            vistos.add(v)
+            unicos.append(v)
+    return unicos
+
+
+async def main(categoria: str = "", out_path: Path | None = None, dump_cedentes: bool = False):
     out_path = out_path or (ROOT_SCRIPTS / "print_abertos.png")
     hoje = date.today()
     ini, fim = q.janela_abertos(hoje)
@@ -263,9 +320,8 @@ async def main(categoria: str = "", out_path: Path | None = None):
         await asyncio.sleep(1)   # capturar_limpo ainda faz HIDE_JS + settle
         lap("fechar filtros")
 
-        # Revalida TODAS as datas no último dia útil: selecionar Plataforma/Tipo
-        # reseta o início do 2º slicer de período (ficava 02/06..05/06 em vez de
-        # 05/06..05/06). Refazer aqui, já com os filtros aplicados, garante o print certo.
+        # Revalida as datas no último dia útil (selecionar Plataforma/Tipo reseta
+        # o início do 2º slicer de período). NÃO mexe na Categoria.
         print("-> revalida datas (todas = último dia útil) antes do print")
         await set_all_date_ranges(page, di, df, "revalida")
         lap("revalida datas")
@@ -273,6 +329,21 @@ async def main(categoria: str = "", out_path: Path | None = None):
         print("-> ordenar tabela por VALOR ABERTO (desc)")
         await q.ordenar_desc(page, "VALOR ABERTO")
         await asyncio.sleep(1.2)
+
+        if dump_cedentes:
+            print(f"-> extraindo CEDENTES ({categoria or 'GERAL'}) — mesmo estado do print")
+            ceds = await extrair_cedentes(page)
+            print(f"\n========== CEDENTES ({categoria or 'GERAL'}) — {len(ceds)} ==========")
+            for i, nome in enumerate(ceds, 1):
+                print(f"{i:>3}. {nome}")
+            print("=" * 52)
+            try:
+                txt = out_path.with_name(out_path.stem + ".cedentes.txt")
+                txt.write_text("\n".join(ceds), encoding="utf-8")
+                print(f"   (salvo em {txt})")
+            except Exception as e:
+                print(f"   (falha ao salvar txt: {e})")
+            lap("dump cedentes")
 
         print("-> passo final: print (tabela inteira, limpo)")
         await q.capturar_limpo(page, out_path)
@@ -289,8 +360,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Captura Títulos Abertos do Power BI (por plataforma)")
     ap.add_argument("--categoria", default="", help="AGRO | INDUSTRIA | ESTRUTURADA (vazio = Geral/Todos)")
     ap.add_argument("--out", default="print_abertos.png", help="nome base do PNG (em scripts/)")
+    ap.add_argument("--dump-cedentes", action="store_true",
+                    help="antes do print, lista a coluna CEDENTE (e salva <out>.cedentes.txt)")
     args = ap.parse_args()
     out = Path(args.out)
     if not out.is_absolute():
         out = ROOT_SCRIPTS / out.name
-    asyncio.run(main(args.categoria, out))
+    asyncio.run(main(args.categoria, out, args.dump_cedentes))
