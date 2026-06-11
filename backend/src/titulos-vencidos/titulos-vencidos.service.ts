@@ -59,6 +59,28 @@ export class TitulosVencidosService {
     return rows.map((r) => r.RESPONSAVEL_COBRANCA.trim()).filter(Boolean);
   }
 
+  /** Rating por CNPJ/CPF (só dígitos) — fonte: data_core.limites (STATUS_REGISTRO='ATIVO').
+   *  Mesma origem usada no BI Financeiro (merge da dCedentes com a query "Limites"). */
+  private async buscarRatings(): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    try {
+      const rows = await this.db.query<{ CPF_CNPJ: string | null; RATING: string | null }>(`
+        SELECT CPF_CNPJ, RATING
+        FROM data_core.limites
+        WHERE STATUS_REGISTRO = 'ATIVO' AND RATING IS NOT NULL AND LTRIM(RTRIM(RATING)) <> ''
+      `);
+      for (const r of rows) {
+        const doc = String(r.CPF_CNPJ ?? '').replace(/\D/g, '');
+        const rating = String(r.RATING ?? '').trim();
+        if (doc && rating && !map.has(doc)) map.set(doc, rating);
+      }
+    } catch (e) {
+      // sem acesso a data_core.limites → segue sem rating (não quebra a carteira)
+      this.logger.warn(`[vencidos] rating indisponível: ${(e as Error).message}`);
+    }
+    return map;
+  }
+
   private toIso(d: Date | null): string | null {
     if (!d) return null;
     // VENCIMENTO é DATE; normaliza pra yyyy-mm-dd sem fuso
@@ -110,12 +132,15 @@ export class TitulosVencidosService {
     const rows = await this.db.query<Row>(sql, params);
     this.logger.log(`[vencidos] ${responsavel} (boleto ${tipoBoleto}): ${rows.length} linhas em ${Date.now() - t0}ms`);
 
-    const statusIdx = await this.bitrix.getStatusIndex();
+    const [statusIdx, ratings] = await Promise.all([
+      this.bitrix.getStatusIndex(),
+      this.buscarRatings(),
+    ]);
 
-    return this.montar(rows, responsavel.trim(), tipoBoleto, statusIdx);
+    return this.montar(rows, responsavel.trim(), tipoBoleto, statusIdx, ratings);
   }
 
-  private montar(rows: Row[], responsavel: string, tipoBoleto: string, idx: StatusIndex): CarteiraData {
+  private montar(rows: Row[], responsavel: string, tipoBoleto: string, idx: StatusIndex, ratings: Map<string, string>): CarteiraData {
     const hoje = new Date().toISOString().slice(0, 10);
     const cedentesMap = new Map<string, Cedente>();
     const sacadoKeyMap = new Map<string, Map<string, Sacado>>();
@@ -134,6 +159,7 @@ export class TitulosVencidosService {
           id: r.CPF_CNPJ_CEDENTE ?? cedNome,
           nome: cedNome,
           cnpj: r.CPF_CNPJ_CEDENTE ?? null,
+          rating: ratings.get(String(r.CPF_CNPJ_CEDENTE ?? '').replace(/\D/g, '')) ?? null,
           sacados: [],
           total: 0, qtd: 0, sacadoQtd: 0, maxDias: 0,
           aging: 'fresh', buckets: emptyBuckets(),

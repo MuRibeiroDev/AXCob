@@ -53,9 +53,20 @@ export interface CriacaoResumo {
   resultados: { numeroTitulo: string; ok: boolean; id?: number | string; erro?: string }[];
 }
 
+export interface AdminUser {
+  id: number;
+  username: string;
+  nome: string;
+  role: string;
+  ativo: boolean;
+  isAdmin: boolean;            // admin DO AxCob (lista própria)
+  permissoes: string[] | null; // telas liberadas; null = todas
+}
+
 export const api = {
   login: (login: string, senha: string) =>
     post<{ token: string; user: SessaoUser }>('/auth/login', { login, senha }),
+  me: () => req<SessaoUser>('/auth/me'),
   responsaveis: () => req<string[]>('/titulos-vencidos/responsaveis'),
   carteira: (responsavel: string, tipoBoleto: TipoBoleto = 'C') =>
     req<CarteiraData>(`/titulos-vencidos?responsavel=${encodeURIComponent(responsavel)}&tipoBoleto=${tipoBoleto}`),
@@ -71,10 +82,16 @@ export const api = {
     post<CriacaoResumo>('/acoes/negativacoes', { itens, analistaId }),
   kanban: <T>(pipeline: 'protesto' | 'negativacao', refresh = false) =>
     req<T>(`/kanban?pipeline=${pipeline}${refresh ? '&refresh=1' : ''}`),
+  kanbanStageMore: <C>(pipeline: 'protesto' | 'negativacao', stageId: string, start: number) =>
+    req<{ cards: C[]; total: number; next: number | null }>(
+      `/kanban/${pipeline}/stage/${encodeURIComponent(stageId)}?start=${start}`),
   moverCard: (cardId: number | string, stageId: string, comentario?: string) =>
     post<{ ok: boolean }>('/kanban/mover', { cardId, stageId, comentario }),
   pixKanban: (refresh = false) =>
     req<PixKanbanData>(`/kanban/pix${refresh ? '?refresh=1' : ''}`),
+  pixStageMore: (stageId: string, start: number) =>
+    req<{ cards: PixCard[]; total: number; next: number | null }>(
+      `/kanban/pix/stage/${encodeURIComponent(stageId)}?start=${start}`),
   identificarPix: (titulo: string, opts?: { cardId?: string | number; doc?: string; refresh?: boolean }) =>
     post<ConciliacaoResultado>('/kanban/pix/identificar', { titulo, ...opts }),
   listConciliacoesPix: () => req<ConciliacaoSalva[]>('/kanban/pix/conciliacoes'),
@@ -97,6 +114,12 @@ export const api = {
       .filter(Boolean).join('&');
     return `${BASE}/relatorios/imagem/${encodeURIComponent(id)}/${encodeURIComponent(String(parte))}${qs ? `?${qs}` : ''}`;
   },
+  // ---- Admin: permissões de tela por usuário ----
+  adminUsers: () => req<AdminUser[]>('/admin/users'),
+  adminSetPermissoes: (id: number, permissoes: string[] | null) =>
+    req<{ ok: boolean; permissoes: string[] | null }>(`/admin/users/${id}/permissoes`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permissoes }),
+    }),
   enviarWhatsapp: (numbers: string[], texto: string) =>
     post<{ total: number; ok: number; falhas: number; resultados: { number: string; ok: boolean; erro?: string }[] }>(
       '/whatsapp/enviar-texto',
@@ -149,9 +172,17 @@ export interface PixCard {
   card_link: string;
 }
 
+export interface PixStageData {
+  id: string;
+  nome: string;
+  cards: PixCard[];
+  total: number;          // total real de cards na etapa (Bitrix)
+  next: number | null;    // cursor p/ lazy load (null = acabou)
+}
+
 export interface PixKanbanData {
   label: string;
-  stages: { id: string; nome: string; cards: PixCard[] }[];
+  stages: PixStageData[];
   totais: { total: number; valor: number };
 }
 

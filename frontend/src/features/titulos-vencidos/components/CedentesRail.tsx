@@ -108,9 +108,24 @@ export function CedentesRail({ cedentes, kpis, sel, onSelect }: CedentesRailProp
                   {ced.nome}
                 </span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 5, paddingLeft: 17 }}>
-                <span className="tnum" style={{ fontSize: 13, fontWeight: 700, color: on ? 'var(--green-700)' : 'var(--ink-700)', whiteSpace: 'nowrap' }}>
-                  {fmtBRL(ced.total)}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 5, paddingLeft: 17, gap: 8 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+                  <span className="tnum" style={{ fontSize: 13, fontWeight: 700, color: on ? 'var(--green-700)' : 'var(--ink-700)', whiteSpace: 'nowrap' }}>
+                    {fmtBRL(ced.total)}
+                  </span>
+                  {ced.rating && (
+                    <span
+                      title={`Rating ${ced.rating}`}
+                      className="tnum"
+                      style={{
+                        flex: '0 0 auto', fontSize: 10, fontWeight: 800, letterSpacing: '.02em',
+                        minWidth: 18, textAlign: 'center', padding: '1px 5px', borderRadius: 6,
+                        border: '1px solid var(--line)', background: 'var(--paper)', color: 'var(--ink-600)',
+                      }}
+                    >
+                      {ced.rating}
+                    </span>
+                  )}
                 </span>
                 <span className="tnum" style={{ fontSize: 10.5, color: 'var(--ink-400)', fontWeight: 500, whiteSpace: 'nowrap' }}>
                   {ced.qtd} tít. · {ced.maxDias}d

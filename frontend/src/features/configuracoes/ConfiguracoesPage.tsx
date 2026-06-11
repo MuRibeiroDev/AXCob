@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Icon } from '@/components/Icon';
 import { api } from '@/lib/api';
 import { getUser } from '@/lib/auth';
+import { AdminPermissoes } from './AdminPermissoes';
 
 export function ConfiguracoesPage() {
   const usuario = getUser();
@@ -13,6 +14,8 @@ export function ConfiguracoesPage() {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const isAdmin = !!usuario?.isAdmin;
+  const [aba, setAba] = useState<'webhook' | 'permissoes'>('webhook');
 
   useEffect(() => {
     api.minhaConfig()
@@ -38,14 +41,39 @@ export function ConfiguracoesPage() {
 
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: 'var(--paper)', padding: '26px 30px' }}>
-      <div style={{ maxWidth: 720, margin: '0 auto' }}>
-        <div style={{ marginBottom: 22 }}>
+      <div style={{ maxWidth: aba === 'permissoes' ? 980 : 720, margin: '0 auto', transition: 'max-width .15s' }}>
+        <div style={{ marginBottom: 16 }}>
           <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-.02em', margin: 0 }}>Configurações</h1>
           <div style={{ fontSize: 13, color: 'var(--ink-400)', marginTop: 4 }}>
             {usuario?.nome ? `${usuario.nome} · ` : ''}preferências da sua conta no AxCob.
           </div>
         </div>
 
+        {/* abas (a de Permissões só para admin) */}
+        {isAdmin && (
+          <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--line)', marginBottom: 18 }}>
+            {([['webhook', 'Webhook'], ['permissoes', 'Permissões']] as const).map(([k, label]) => {
+              const on = aba === k;
+              return (
+                <button
+                  key={k}
+                  onClick={() => setAba(k)}
+                  style={{
+                    border: 'none', background: 'transparent', cursor: 'pointer', font: 'inherit',
+                    padding: '8px 16px', fontSize: 13, fontWeight: 600, marginBottom: -1,
+                    color: on ? 'var(--green-800)' : 'var(--ink-400)',
+                    borderBottom: `2px solid ${on ? 'var(--accent)' : 'transparent'}`,
+                    transition: 'color .15s, border-color .15s',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {aba === 'webhook' && (
         <div style={{ background: 'var(--white)', border: '1px solid var(--line)', borderRadius: 14, boxShadow: 'var(--sh-sm)', overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 34, height: 34, borderRadius: 9, background: 'var(--green-50)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--green-700)' }}>
@@ -114,6 +142,10 @@ export function ConfiguracoesPage() {
             </ol>
           </div>
         </div>
+        )}
+
+        {/* Administração — só para admins: permissões de tela por usuário */}
+        {isAdmin && aba === 'permissoes' && <AdminPermissoes />}
       </div>
     </div>
   );

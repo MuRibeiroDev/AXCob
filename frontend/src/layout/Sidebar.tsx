@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { Icon } from '@/components/Icon';
 import { getUser, logout } from '@/lib/auth';
+import { canAccess } from '@/lib/screens';
 
 const logoUrl = '/logo-audax.png';
 
@@ -104,21 +105,23 @@ export function Sidebar() {
 
       {/* ---- Navegação ---- */}
       <nav style={{ flex: 1, padding: collapsed ? '8px 10px' : '8px 14px', overflowY: 'auto' }}>
-        {NAV.map(renderItem)}
+        {NAV.filter((item) => canAccess(user, item.to.replace(/^\//, ''))).map(renderItem)}
       </nav>
 
       {/* ---- Rodapé ---- */}
       <div style={{ padding: collapsed ? '8px 10px 12px' : '8px 14px 14px', display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <NavLink to="/configuracoes" title={collapsed ? 'Configurações' : undefined} style={{ textDecoration: 'none', display: 'block' }}>
-          {({ isActive }) => (
-            <div onMouseEnter={hoverIn(isActive)} onMouseLeave={hoverOut(isActive)} style={itemBase(isActive)}>
-              <Icon name="cog" size={18} style={{ color: isActive ? 'var(--ink-900)' : 'var(--ink-400)', flex: '0 0 auto' }} />
-              {!collapsed && <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Configurações</span>}
-              {isActive && !collapsed && <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--accent)', flex: '0 0 auto' }} />}
-              {isActive && collapsed && <span style={{ position: 'absolute', top: 7, right: 7, width: 6, height: 6, borderRadius: 999, background: 'var(--accent)' }} />}
-            </div>
-          )}
-        </NavLink>
+        {canAccess(user, 'configuracoes') && (
+          <NavLink to="/configuracoes" title={collapsed ? 'Configurações' : undefined} style={{ textDecoration: 'none', display: 'block' }}>
+            {({ isActive }) => (
+              <div onMouseEnter={hoverIn(isActive)} onMouseLeave={hoverOut(isActive)} style={itemBase(isActive)}>
+                <Icon name="cog" size={18} style={{ color: isActive ? 'var(--ink-900)' : 'var(--ink-400)', flex: '0 0 auto' }} />
+                {!collapsed && <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Configurações</span>}
+                {isActive && !collapsed && <span style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--accent)', flex: '0 0 auto' }} />}
+                {isActive && collapsed && <span style={{ position: 'absolute', top: 7, right: 7, width: 6, height: 6, borderRadius: 999, background: 'var(--accent)' }} />}
+              </div>
+            )}
+          </NavLink>
+        )}
 
         <button
           onClick={() => setCollapsed((c) => !c)}
@@ -140,8 +143,10 @@ export function Sidebar() {
 
         {/* usuário logado + sair */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 6, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
-          <div style={{ width: 30, height: 30, borderRadius: '50%', flex: '0 0 auto', background: 'var(--green-50)', color: 'var(--green-700)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 11.5 }}>
-            {iniciais}
+          <div style={{ width: 30, height: 30, borderRadius: '50%', flex: '0 0 auto', background: 'var(--green-50)', color: 'var(--green-700)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 11.5, overflow: 'hidden' }}>
+            {user?.foto
+              ? <img src={user.foto} alt={user?.nome || user?.username || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : iniciais}
           </div>
           {!collapsed && (
             <div style={{ lineHeight: 1.2, flex: 1, minWidth: 0 }}>

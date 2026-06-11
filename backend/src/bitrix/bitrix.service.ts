@@ -282,6 +282,28 @@ export class BitrixService {
     return cards;
   }
 
+  /** UMA página de cards de uma etapa de protesto/negativação (lazy loading).
+   *  Retorna os cards normalizados, o `total` real da etapa e o cursor `next`. */
+  async listStageCards(
+    pipelineKey: 'protesto' | 'negativacao',
+    stageId: string,
+    start = 0,
+  ): Promise<{ cards: NormalizedCard[]; total: number; next: number | null }> {
+    const pl = PIPELINES[pipelineKey];
+    const select = ['id', 'title', 'stageId', 'createdBy', BITRIX_FIELDS.numero, BITRIX_FIELDS.cnpjSacado, BITRIX_FIELDS.razaoCedente, BITRIX_FIELDS.razaoSacado, BITRIX_FIELDS.valorSacado];
+    const data = await this.post('crm.item.list', {
+      entityTypeId: ENTITY_TYPE_ID,
+      filter: { categoryId: pl.categoryId, stageId },
+      order: { id: 'desc' }, select, start,
+    });
+    const items: RawCard[] = data?.result?.items ?? [];
+    return {
+      cards: items.map((c) => this.normalize(c, pl)),
+      total: Number(data?.total ?? items.length),
+      next: data?.next != null ? Number(data.next) : null,
+    };
+  }
+
   private mapPixCard(c: RawCard): PixCard {
     return {
       id: c.id,
@@ -295,42 +317,33 @@ export class BitrixService {
     };
   }
 
-  /** Lista os cards das etapas de PIX (SPA 1248, categoria 146).
-   *  Etapas sem `limite` vêm completas (paginado); etapas com `limite` (ex.:
-   *  "Atividade Concluído", 651 cards) trazem só os N mais recentes. */
-  async listPixCards(): Promise<PixCard[]> {
+  /** Lista TODAS as etapas reais da SPA Financeiro (1248, categoria 146), ordenadas. */
+  async listPixStages(): Promise<{ id: string; nome: string }[]> {
+    const data = await this.post('crm.status.list', {
+      filter: { ENTITY_ID: `DYNAMIC_${PIX_PIPELINE.entityTypeId}_STAGE_${PIX_PIPELINE.categoryId}` },
+      order: { SORT: 'ASC' },
+    });
+    const rows: any[] = data?.result ?? [];
+    return rows
+      .sort((a, b) => Number(a.SORT) - Number(b.SORT))
+      .map((s) => ({ id: String(s.STATUS_ID), nome: String(s.NAME) }));
+  }
+
+  /** UMA página de cards de uma etapa de PIX (lazy loading por coluna).
+   *  Retorna os cards, o `total` real da etapa e o cursor `next` (ou null). */
+  async listPixStageCards(stageId: string, start = 0): Promise<{ cards: PixCard[]; total: number; next: number | null }> {
     const select = ['id', 'title', 'stageId', 'createdBy', 'createdTime', PIX_PIPELINE.fields.nome, PIX_PIPELINE.fields.valor];
-    const out: PixCard[] = [];
-
-    // 1) etapas ativas (sem limite) — todas, paginado
-    const ativas = PIX_PIPELINE.stages.filter((s) => !s.limite).map((s) => s.id);
-    if (ativas.length) {
-      let start = 0;
-      for (;;) {
-        const data = await this.post('crm.item.list', {
-          entityTypeId: PIX_PIPELINE.entityTypeId,
-          filter: { categoryId: PIX_PIPELINE.categoryId, '@stageId': ativas },
-          order: { id: 'desc' }, select, start,
-        });
-        const items: RawCard[] = data?.result?.items ?? [];
-        out.push(...items.map((c) => this.mapPixCard(c)));
-        if (data?.next == null) break;
-        start = data.next;
-      }
-    }
-
-    // 2) etapas com limite — só os N mais recentes (1 página, id desc)
-    for (const st of PIX_PIPELINE.stages.filter((s) => s.limite)) {
-      const data = await this.post('crm.item.list', {
-        entityTypeId: PIX_PIPELINE.entityTypeId,
-        filter: { categoryId: PIX_PIPELINE.categoryId, stageId: st.id },
-        order: { id: 'desc' }, select, start: 0,
-      });
-      const items: RawCard[] = (data?.result?.items ?? []).slice(0, st.limite);
-      out.push(...items.map((c) => this.mapPixCard(c)));
-    }
-
-    return out;
+    const data = await this.post('crm.item.list', {
+      entityTypeId: PIX_PIPELINE.entityTypeId,
+      filter: { categoryId: PIX_PIPELINE.categoryId, stageId },
+      order: { id: 'desc' }, select, start,
+    });
+    const items: RawCard[] = data?.result?.items ?? [];
+    return {
+      cards: items.map((c) => this.mapPixCard(c)),
+      total: Number(data?.total ?? items.length),
+      next: data?.next != null ? Number(data.next) : null,
+    };
   }
 
   /** Índice combinado de protesto/negativação (com cache TTL). */

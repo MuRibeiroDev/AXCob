@@ -30,6 +30,8 @@ export interface KanbanStage {
   nome: string;
   plataforma: string;
   cards: KanbanCard[];
+  total: number;          // total real de cards na etapa (Bitrix)
+  next: number | null;    // cursor p/ lazy load (null = tudo carregado)
 }
 
 export interface KanbanTotais {

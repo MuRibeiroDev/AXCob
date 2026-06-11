@@ -35,6 +35,7 @@ export interface Cedente {
   id: string;
   nome: string;
   cnpj: string | null;
+  rating: string | null; // RATING de data_core.limites (por CNPJ), ou null
   sacados: Sacado[];
   total: number;
   qtd: number;

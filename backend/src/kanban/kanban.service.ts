@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
-import { BitrixService } from '../bitrix/bitrix.service';
-import { PIPELINES, PIX_PIPELINE } from '../bitrix/bitrix.types';
+import { BitrixService, type NormalizedCard } from '../bitrix/bitrix.service';
+import { PIPELINES } from '../bitrix/bitrix.types';
 
 export type PipelineKey = 'protesto' | 'negativacao';
 type Status = 'quitado_pronto' | 'quitado_parcial' | 'nao_quitado';
@@ -27,35 +27,54 @@ export class KanbanService {
 
   constructor(private readonly db: DatabaseService, private readonly bitrix: BitrixService) {}
 
-  /** Kanban de PIX (3 etapas da SPA Financeiro 1248) — display-only, com cache. */
+  /** Resolve "criado_por" para uma lista de cards (1 chamada de nomes). */
+  private async comCriadoPor(cards: any[]): Promise<any[]> {
+    const userIds = [...new Set(cards.map((c) => c.created_by_id).filter((x): x is number | string => x != null))];
+    const userNames = await this.bitrix.resolveUserNames(userIds);
+    return cards.map((c) => ({
+      ...c,
+      criado_por: c.created_by_id != null ? (userNames.get(String(c.created_by_id)) ?? `ID ${c.created_by_id}`) : '—',
+    }));
+  }
+
+  /** Kanban de PIX — pipeline COMPLETO da SPA Financeiro 1248 (todas as etapas,
+   *  dinâmicas). Traz a 1ª página de cada etapa; o resto é lazy-loaded por coluna
+   *  (ver pixStage). `total`/`next` por etapa permitem o "carregar mais". */
   async getPix(refresh = false) {
     if (!refresh && this.pixCache) {
       this.logger.log('kanban pix: cache hit');
       return this.pixCache;
     }
-    const cards = await this.bitrix.listPixCards();
-    const userIds = [...new Set(cards.map((c) => c.created_by_id).filter((x): x is number | string => x != null))];
-    const userNames = await this.bitrix.resolveUserNames(userIds);
+    const stages = await this.bitrix.listPixStages();
+    const pages = await Promise.all(stages.map((s) => this.bitrix.listPixStageCards(s.id, 0)));
+    const enriched = await this.comCriadoPor(pages.flatMap((p) => p.cards));
 
-    const byStage = new Map<string, any[]>(PIX_PIPELINE.stages.map((s) => [s.id, []]));
-    let totalValor = 0;
-    for (const c of cards) {
-      if (c.valor != null) totalValor += c.valor;
-      const out = {
-        ...c,
-        criado_por: c.created_by_id != null ? (userNames.get(String(c.created_by_id)) ?? `ID ${c.created_by_id}`) : '—',
-      };
-      (byStage.get(c.stage_id) ?? byStage.set(c.stage_id, []).get(c.stage_id)!).push(out);
-    }
+    // re-agrupa os cards enriquecidos por etapa, preservando a ordem
+    let idx = 0;
+    const outStages = stages.map((s, i) => {
+      const n = pages[i].cards.length;
+      const cards = enriched.slice(idx, idx + n);
+      idx += n;
+      return { id: s.id, nome: s.nome, cards, total: pages[i].total, next: pages[i].next };
+    });
 
+    const totalCards = pages.reduce((a, p) => a + p.total, 0);
+    const totalValor = enriched.reduce((a, c) => a + (c.valor ?? 0), 0);
     const result = {
       label: 'PIX a Identificar',
-      stages: PIX_PIPELINE.stages.map((s) => ({ id: s.id, nome: s.nome, cards: byStage.get(s.id) ?? [] })),
-      totais: { total: cards.length, valor: totalValor },
+      stages: outStages,
+      totais: { total: totalCards, valor: totalValor },
     };
     this.pixCache = result;
-    this.logger.log(`kanban pix: rebuild (${cards.length} cards)`);
+    this.logger.log(`kanban pix: rebuild (${stages.length} etapas, ${totalCards} cards)`);
     return result;
+  }
+
+  /** Lazy load: 1 página de cards de uma etapa de PIX (a partir de `start`). */
+  async pixStage(stageId: string, start = 0) {
+    const pg = await this.bitrix.listPixStageCards(stageId, start);
+    const cards = await this.comCriadoPor(pg.cards);
+    return { cards, total: pg.total, next: pg.next };
   }
 
   /** Serve do cache; só rebusca no Bitrix se `refresh` ou se não houver cache. */
@@ -79,18 +98,13 @@ export class KanbanService {
     return { ok: true };
   }
 
-  private async build(pipeline: PipelineKey) {
-    const [cards, stages] = await Promise.all([
-      this.bitrix.listAllCards(pipeline),
-      this.bitrix.listStages(pipeline),
-    ]);
-
-    // nomes de quem abriu o card
+  /** Enriquece cards (nome de quem abriu + classificação SQL quitado/parcial/aberto)
+   *  no shape de saída do board. Reusado pelo build (1ª página) e pelo lazy load. */
+  private async enriquecerCards(cards: NormalizedCard[]): Promise<any[]> {
     const userIds = [...new Set(cards.map((c) => c.created_by_id).filter((x): x is number | string => x != null))];
-    const userNames = await this.bitrix.resolveUserNames(userIds);
-
     const numeros = [...new Set(cards.map((c) => c.numero_titulo).filter((n): n is string => !!n))];
-    const [quitados, abertos] = await Promise.all([
+    const [userNames, quitados, abertos] = await Promise.all([
+      this.bitrix.resolveUserNames(userIds),
       this.queryIn<QuitadoRow>('vw_titulos_quitados', 'NUMERO',
         'NUMERO, CPF_CNPJ_SACADO, VALOR_FACE, LIQUIDADO, QUITACAO, SITUACAO', numeros),
       this.queryIn<AbertoRow>('vw_titulos_abertos', 'DOCUMENTO',
@@ -110,13 +124,9 @@ export class KanbanService {
       (abertosIdx.get(k) ?? abertosIdx.set(k, []).get(k)!).push(r);
     }
 
-    const totais = { total: cards.length, quitado_pronto: 0, quitado_parcial: 0, nao_quitado: 0 };
-    const byStage = new Map<string, any[]>(stages.map((s) => [s.id, []]));
-
-    for (const c of cards) {
+    return cards.map((c) => {
       const { status, quitado } = this.classificar(c, quitadosIdx, abertosIdx);
-      totais[status] += 1;
-      const out = {
+      return {
         id: c.id,
         titulo_card: c.titulo_card,
         stage_id: c.stage_id,
@@ -133,15 +143,35 @@ export class KanbanService {
         situacao_smart: quitado?.SITUACAO ?? null,
         card_link: `${BITRIX_DETAIL}/${c.id}/`,
       };
-      (byStage.get(c.stage_id) ?? byStage.set(c.stage_id, []).get(c.stage_id)!).push(out);
-    }
+    });
+  }
 
-    return {
-      pipeline,
-      label: PIPELINES[pipeline].label,
-      stages: stages.map((s) => ({ id: s.id, nome: s.nome, plataforma: s.plataforma, cards: byStage.get(s.id) ?? [] })),
-      totais,
-    };
+  /** Monta o board: TODAS as etapas, com a 1ª página de cada (lazy load do resto).
+   *  `total`/`next` por etapa = contagem EXATA + cursor p/ "carregar mais". */
+  private async build(pipeline: PipelineKey) {
+    const stages = await this.bitrix.listStages(pipeline);
+    const pages = await Promise.all(stages.map((s) => this.bitrix.listStageCards(pipeline, s.id, 0)));
+    const enriched = await this.enriquecerCards(pages.flatMap((p) => p.cards));
+
+    const totais = { total: 0, quitado_pronto: 0, quitado_parcial: 0, nao_quitado: 0 };
+    let idx = 0;
+    const outStages = stages.map((s, i) => {
+      const n = pages[i].cards.length;
+      const cards = enriched.slice(idx, idx + n);
+      idx += n;
+      for (const c of cards) (totais as Record<string, number>)[c.status] += 1;
+      totais.total += pages[i].total; // contagem EXATA da etapa (não só a 1ª página)
+      return { id: s.id, nome: s.nome, plataforma: s.plataforma, cards, total: pages[i].total, next: pages[i].next };
+    });
+
+    return { pipeline, label: PIPELINES[pipeline].label, stages: outStages, totais };
+  }
+
+  /** Lazy load: 1 página de cards (já enriquecidos) de uma etapa do board. */
+  async kanbanStage(pipeline: PipelineKey, stageId: string, start = 0) {
+    const pg = await this.bitrix.listStageCards(pipeline, stageId, start);
+    const cards = await this.enriquecerCards(pg.cards);
+    return { cards, total: pg.total, next: pg.next };
   }
 
   private classificar(

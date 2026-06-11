@@ -28,15 +28,6 @@ export function TopBar({ hoje, responsaveis, responsavel, onResponsavel }: TopBa
           Posição em <b style={{ color: 'var(--ink-700)' }} className="tnum">{fmtDate(hoje)}</b>
         </div>
         <button className="btn btn-ghost btn-sm"><Icon name="download" size={14} />Exportar</button>
-        <div
-          style={{
-            width: 34, height: 34, borderRadius: '50%', background: 'var(--green-50)',
-            color: 'var(--green-700)', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', fontWeight: 700, fontSize: 13, flex: '0 0 auto',
-          }}
-        >
-          RS
-        </div>
       </div>
     </div>
   );

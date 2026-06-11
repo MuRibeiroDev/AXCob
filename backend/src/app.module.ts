@@ -9,6 +9,7 @@ import { RelatoriosModule } from './relatorios/relatorios.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { AuthModule } from './auth/auth.module';
 import { UserConfigModule } from './user-config/user-config.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { UserConfigModule } from './user-config/user-config.module';
     }),
     AuthModule,
     UserConfigModule,
+    AdminModule,
     DatabaseModule,
     BitrixModule,
     TitulosVencidosModule,

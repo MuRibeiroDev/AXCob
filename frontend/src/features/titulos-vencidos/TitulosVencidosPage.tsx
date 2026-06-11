@@ -2,7 +2,7 @@
    Carteira = responsável de cobrança. Filtros de aging/busca aplicados no cliente. */
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
-import { ageMeta, tituloEstados } from '@/lib/aging';
+import { tituloEstados } from '@/lib/aging';
 import { api } from '@/lib/api';
 import { fmtBRL } from '@/lib/format';
 import type { CarteiraData, Sacado, StatusKey, TipoBoleto, Titulo } from '@/lib/types';
@@ -237,10 +237,14 @@ export function TitulosVencidosPage() {
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <span style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-.01em', whiteSpace: 'nowrap' }}>{cedente.nome}</span>
-                      <span className="chip" style={{ background: ageMeta(cedente.aging).bg, color: ageMeta(cedente.aging).fg }}>
-                        <span className="dot" />
-                        {ageMeta(cedente.aging).risk}
-                      </span>
+                      {cedente.rating && (
+                        <span
+                          title="Rating do cedente (data_core.limites)"
+                          style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', padding: '3px 9px', borderRadius: 999, border: '1px solid var(--line)', background: 'var(--paper)', color: 'var(--ink-700)', whiteSpace: 'nowrap' }}
+                        >
+                          RATING {cedente.rating}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--ink-400)' }}>
                       {cedente.cnpj ? `CNPJ ${cedente.cnpj} · ` : ''}{cedente.sacadoQtd} sacados · {cedente.qtd} títulos

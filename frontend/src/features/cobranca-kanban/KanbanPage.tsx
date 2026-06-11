@@ -191,6 +191,40 @@ export function KanbanPage() {
     setComentario('');
   };
 
+  // ---- lazy load por coluna (scroll infinito): busca a próxima página e anexa ----
+  const [carregandoMais, setCarregandoMais] = useState<Set<string>>(new Set());
+  const emVoo = useRef<Set<string>>(new Set()); // guard síncrono (scroll dispara vários eventos)
+  const carregarMais = useCallback((stageId: string) => {
+    if (emVoo.current.has(stageId)) return;
+    const stage = data?.stages.find((s) => s.id === stageId);
+    if (!stage || stage.next == null) return;
+    const start = stage.next;
+    emVoo.current.add(stageId);
+    setCarregandoMais((s) => new Set(s).add(stageId));
+    api.kanbanStageMore<KanbanCard>(pipeline, stageId, start)
+      .then((pg) => {
+        setData((prev) => {
+          if (!prev) return prev;
+          const next: KanbanData = {
+            ...prev,
+            stages: prev.stages.map((s) => {
+              if (s.id !== stageId) return s;
+              const vistos = new Set(s.cards.map((c) => String(c.id)));
+              const novos = pg.cards.filter((c) => !vistos.has(String(c.id)));
+              return { ...s, cards: [...s.cards, ...novos], total: pg.total, next: pg.next };
+            }),
+          };
+          cacheRef.current[pipeline] = { data: next, at: cacheRef.current[pipeline]?.at ?? updatedAt };
+          return next;
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        emVoo.current.delete(stageId);
+        setCarregandoMais((s) => { const n = new Set(s); n.delete(stageId); return n; });
+      });
+  }, [data, pipeline, updatedAt]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: 'var(--paper)' }}>
       {/* ---- Top bar da página ---- */}
@@ -287,7 +321,7 @@ export function KanbanPage() {
                   <div style={{ maxHeight: 320, overflowY: 'auto' }}>
                     {data.stages.map((s) => (
                       <CheckRow key={s.id} checked={etapas.includes(s.id)} onClick={() => setEtapas((a) => toggle(a, s.id))}
-                        label={<span style={{ display: 'flex', justifyContent: 'space-between', gap: 8, width: '100%' }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.nome}</span><span className="tnum" style={{ color: 'var(--ink-400)' }}>{s.cards.length}</span></span>} />
+                        label={<span style={{ display: 'flex', justifyContent: 'space-between', gap: 8, width: '100%' }}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.nome}</span><span className="tnum" style={{ color: 'var(--ink-400)' }}>{s.total}</span></span>} />
                     ))}
                     {etapas.length > 0 && <button className="btn btn-quiet btn-sm" style={{ width: '100%', marginTop: 4 }} onClick={() => setEtapas([])}>Limpar</button>}
                   </div>
@@ -372,7 +406,14 @@ export function KanbanPage() {
               }}
             >
               {filteredStages.map((stage) => (
-                <KanbanColumn key={stage.id} stage={stage} onCardDragStart={onCardDragStart} onDropCard={onDropCard} />
+                <KanbanColumn
+                  key={stage.id}
+                  stage={stage}
+                  onCardDragStart={onCardDragStart}
+                  onDropCard={onDropCard}
+                  onCarregarMais={carregarMais}
+                  carregandoMais={carregandoMais.has(stage.id)}
+                />
               ))}
             </div>
             </div>

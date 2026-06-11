@@ -1,14 +1,14 @@
-/* Tela: PIX a Identificar — espelho read-only de 3 etapas da SPA Financeiro (1248)
-   do Bitrix. Mesmo visual do board de Negativação/Protestos. Apenas leitura:
-   cada card abre no Bitrix ao clicar. */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+/* Tela: PIX a Identificar — espelho do pipeline COMPLETO da SPA Financeiro (1248)
+   do Bitrix (todas as etapas). Cada card abre no Bitrix ao clicar; o botão
+   "Identificar título" aparece só na etapa "Financeiro: PIX à Identificar". */
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
 import { Popover } from '@/components/Popover';
 import { api, type ConciliacaoResultado, type PixCard, type PixKanbanData } from '@/lib/api';
 import { fmtBRL, fmtDate } from '@/lib/format';
 
-// etapas onde aparece o botão "Identificar" (PIX à Identificar + Atividade Concluído)
-const STAGES_IDENTIFICAR = new Set(['DT1248_146:NEW', 'DT1248_146:SUCCESS']);
+// O botão "Identificar título" aparece SÓ na etapa "Financeiro: PIX à Identificar".
+const STAGES_IDENTIFICAR = new Set(['DT1248_146:NEW']);
 
 // Relatório de Títulos Abertos (Power BI). Tabela/colunas conferidas no modelo:
 // fTitulosAbertos / Documento / Data Vencimento (espaço vira _x0020_ no filtro de URL).
@@ -97,11 +97,13 @@ function Card({ card, onIdentificar, identificando, analisado }: { card: PixCard
   );
 }
 
-function Column({ stage, onIdentificar, identificandoId, analisadoIds }: {
+function Column({ stage, onIdentificar, identificandoId, analisadoIds, onCarregarMais, carregandoMais }: {
   stage: PixKanbanData['stages'][number];
   onIdentificar?: (card: PixCard) => void;
   identificandoId?: string | number | null;
   analisadoIds?: Set<string>;
+  onCarregarMais?: (stageId: string) => void;
+  carregandoMais?: boolean;
 }) {
   return (
     <div
@@ -121,11 +123,19 @@ function Column({ stage, onIdentificar, identificandoId, analisadoIds }: {
           {stage.nome}
         </h3>
         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-500)', background: 'var(--white)', borderRadius: 999, padding: '2px 8px', border: '1px solid var(--line)', flex: '0 0 auto', marginLeft: 8 }}>
-          {stage.cards.length}
+          {stage.cards.length}{stage.total > stage.cards.length ? ` / ${stage.total}` : ''}
         </span>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div
+        onScroll={(e) => {
+          // scroll infinito: ao chegar perto do fim da coluna, carrega a próxima página
+          if (!onCarregarMais || carregandoMais || stage.next == null) return;
+          const el = e.currentTarget;
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) onCarregarMais(stage.id);
+        }}
+        style={{ flex: 1, overflowY: 'auto', paddingRight: 4, display: 'flex', flexDirection: 'column', gap: 8 }}
+      >
         {stage.cards.length === 0 ? (
           <div style={{ color: 'var(--ink-300)', fontSize: 12, textAlign: 'center', padding: '24px 6px' }}>
             Nenhum card
@@ -140,6 +150,19 @@ function Column({ stage, onIdentificar, identificandoId, analisadoIds }: {
               analisado={analisadoIds?.has(String(c.id))}
             />
           ))
+        )}
+
+        {/* Lazy load: carrega a próxima página de cards desta etapa sob demanda */}
+        {stage.next != null && (
+          <button
+            type="button" className="btn btn-quiet btn-sm"
+            disabled={carregandoMais}
+            onClick={() => onCarregarMais?.(stage.id)}
+            style={{ width: '100%', marginTop: 2, justifyContent: 'center' }}
+          >
+            <Icon name="history" size={13} className={carregandoMais ? 'spin' : undefined} />
+            {carregandoMais ? 'Carregando…' : 'Carregar mais'}
+          </button>
         )}
       </div>
     </div>
@@ -311,6 +334,38 @@ export function PixPage() {
 
   const analisadoIds = useMemo(() => new Set(conciliacoes.keys()), [conciliacoes]);
 
+  // lazy load por coluna: busca a próxima página de uma etapa e anexa (sem duplicar)
+  const [carregandoMais, setCarregandoMais] = useState<Set<string>>(new Set());
+  const emVoo = useRef<Set<string>>(new Set()); // guard síncrono (scroll dispara vários eventos)
+  const carregarMais = useCallback((stageId: string) => {
+    if (emVoo.current.has(stageId)) return;
+    const stage = data?.stages.find((s) => s.id === stageId);
+    if (!stage || stage.next == null) return;
+    const start = stage.next;
+    emVoo.current.add(stageId);
+    setCarregandoMais((s) => new Set(s).add(stageId));
+    api.pixStageMore(stageId, start)
+      .then((pg) => {
+        setData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            stages: prev.stages.map((s) => {
+              if (s.id !== stageId) return s;
+              const vistos = new Set(s.cards.map((c) => String(c.id)));
+              const novos = pg.cards.filter((c) => !vistos.has(String(c.id)));
+              return { ...s, cards: [...s.cards, ...novos], total: pg.total, next: pg.next };
+            }),
+          };
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        emVoo.current.delete(stageId);
+        setCarregandoMais((s) => { const n = new Set(s); n.delete(stageId); return n; });
+      });
+  }, [data]);
+
   const load = useCallback((force = false) => {
     setLoading(true);
     setError(null);
@@ -449,6 +504,8 @@ export function PixPage() {
                   onIdentificar={STAGES_IDENTIFICAR.has(stage.id) ? abrirIdentificacao : undefined}
                   identificandoId={identificandoId}
                   analisadoIds={analisadoIds}
+                  onCarregarMais={carregarMais}
+                  carregandoMais={carregandoMais.has(stage.id)}
                 />
               ))}
             </div>

@@ -9,6 +9,9 @@ export interface SessaoUser {
   nome: string;
   role: string;
   phone?: string | null;
+  foto?: string | null; // profile_photo (data-URI base64) ou null/ausente
+  permissoes?: string[] | null; // telas liberadas; null/ausente = todas
+  isAdmin?: boolean; // admin DO AxCob (lista própria; role é compartilhado)
 }
 
 export function getToken(): string {

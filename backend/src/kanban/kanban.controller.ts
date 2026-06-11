@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { KanbanService, type PipelineKey } from './kanban.service';
 import { ConciliacaoService } from './conciliacao.service';
 
@@ -46,6 +46,31 @@ export class KanbanController {
   @Get('pix/conciliacoes')
   conciliacoesPix() {
     return this.conciliacao.salvas();
+  }
+
+  /** Lazy load de uma etapa de PIX: 1 página de cards a partir de `start`. */
+  @Get('pix/stage/:stageId')
+  pixStage(@Param('stageId') stageId: string, @Query('start') start?: string) {
+    if (!/^DT1248_146:[A-Z0-9_]+$/.test(stageId)) {
+      throw new BadRequestException('stageId inválido.');
+    }
+    return this.service.pixStage(stageId, Math.max(0, Number(start) || 0));
+  }
+
+  /** Lazy load de uma etapa do board (protesto/negativação): 1 página a partir de `start`. */
+  @Get(':pipeline/stage/:stageId')
+  boardStage(
+    @Param('pipeline') pipeline: string,
+    @Param('stageId') stageId: string,
+    @Query('start') start?: string,
+  ) {
+    if (pipeline !== 'protesto' && pipeline !== 'negativacao') {
+      throw new BadRequestException("pipeline deve ser 'protesto' ou 'negativacao'.");
+    }
+    if (!/^DT1200_\d+:[A-Z0-9_]+$/.test(stageId)) {
+      throw new BadRequestException('stageId inválido.');
+    }
+    return this.service.kanbanStage(pipeline as PipelineKey, stageId, Math.max(0, Number(start) || 0));
   }
 
   /** Move um card de etapa no Bitrix (+ comentário opcional no timeline). */
