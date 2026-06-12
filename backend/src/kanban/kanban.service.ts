@@ -89,12 +89,13 @@ export class KanbanService {
     return result;
   }
 
-  /** Move o card no Bitrix e, se houver, adiciona comentário no timeline. Limpa o cache. */
-  async moverCard(cardId: number | string, stageId: string, comentario?: string) {
-    await this.bitrix.moverEtapa(cardId, stageId);
-    if (comentario?.trim()) await this.bitrix.adicionarComentario(cardId, comentario.trim());
+  /** Move o card no Bitrix e, se houver, adiciona comentário no timeline. Limpa o cache.
+   *  `webhook` (do usuário logado) → movimentação/comentário saem no nome dele. */
+  async moverCard(cardId: number | string, stageId: string, comentario?: string, webhook?: string | null) {
+    await this.bitrix.moverEtapa(cardId, stageId, webhook);
+    if (comentario?.trim()) await this.bitrix.adicionarComentario(cardId, comentario.trim(), webhook);
     this.cache.clear();
-    this.logger.log(`card ${cardId} movido p/ ${stageId}${comentario ? ' (+comentário)' : ''}`);
+    this.logger.log(`card ${cardId} movido p/ ${stageId}${comentario ? ' (+comentário)' : ''}${webhook ? ' (webhook do usuário)' : ''}`);
     return { ok: true };
   }
 

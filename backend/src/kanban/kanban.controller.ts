@@ -1,12 +1,14 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { KanbanService, type PipelineKey } from './kanban.service';
 import { ConciliacaoService } from './conciliacao.service';
+import { UserConfigService } from '../user-config/user-config.service';
 
 @Controller('kanban')
 export class KanbanController {
   constructor(
     private readonly service: KanbanService,
     private readonly conciliacao: ConciliacaoService,
+    private readonly cfg: UserConfigService,
   ) {}
 
   /** Espelho do pipeline do Bitrix (todas as etapas + cards reais).
@@ -73,12 +75,16 @@ export class KanbanController {
     return this.service.kanbanStage(pipeline as PipelineKey, stageId, Math.max(0, Number(start) || 0));
   }
 
-  /** Move um card de etapa no Bitrix (+ comentário opcional no timeline). */
+  /** Move um card de etapa no Bitrix (+ comentário opcional no timeline).
+   *  Usa o webhook do PRÓPRIO usuário logado (webhook_bitrix_deal) → a
+   *  movimentação e o comentário saem no nome dele, não da integração. */
   @Post('mover')
-  mover(@Body() body: { cardId?: number | string; stageId?: string; comentario?: string }) {
+  async mover(@Req() req: any, @Body() body: { cardId?: number | string; stageId?: string; comentario?: string }) {
     if (!body?.cardId || !body?.stageId) {
       throw new BadRequestException('cardId e stageId são obrigatórios.');
     }
-    return this.service.moverCard(body.cardId, body.stageId, body.comentario);
+    const userId = Number(req.user?.sub ?? req.user?.id);
+    const webhook = Number.isFinite(userId) ? await this.cfg.webhookDoUsuario(userId) : null;
+    return this.service.moverCard(body.cardId, body.stageId, body.comentario, webhook);
   }
 }

@@ -412,23 +412,25 @@ export class BitrixService {
     return out.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   }
 
-  /** Move o card para outra etapa (crm.item.update). */
-  async moverEtapa(cardId: number | string, stageId: string): Promise<void> {
+  /** Move o card para outra etapa (crm.item.update). `webhook` (do usuário
+   *  logado) faz a movimentação sair com o nome dele no histórico. */
+  async moverEtapa(cardId: number | string, stageId: string, webhook?: string | null): Promise<void> {
     const res = await this.post('crm.item.update', {
       entityTypeId: ENTITY_TYPE_ID,
       id: cardId,
       fields: { stageId },
-    });
+    }, webhook);
     if (!res?.result?.item) {
       throw new Error(res?.error_description || 'falha ao mover etapa no Bitrix');
     }
   }
 
-  /** Adiciona comentário no timeline do card (crm.timeline.comment.add). */
-  async adicionarComentario(cardId: number | string, comentario: string): Promise<void> {
+  /** Adiciona comentário no timeline do card (crm.timeline.comment.add).
+   *  `webhook` (do usuário logado) faz o comentário sair com o nome dele. */
+  async adicionarComentario(cardId: number | string, comentario: string, webhook?: string | null): Promise<void> {
     const res = await this.post('crm.timeline.comment.add', {
       fields: { ENTITY_ID: cardId, ENTITY_TYPE: 'dynamic_1200', COMMENT: comentario },
-    });
+    }, webhook);
     if (!res?.result) {
       throw new Error(res?.error_description || 'falha ao adicionar comentário no Bitrix');
     }
