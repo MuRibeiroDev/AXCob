@@ -412,7 +412,9 @@ export class RelatoriosService {
     const chave = (numero: string, docCed: string | null | undefined, docSac: string | null | undefined, sistema: string | null | undefined) =>
       `${numero}|${docCed ?? ''}|${docSac ?? ''}|${(sistema ?? '').trim().toUpperCase()}`;
     const docs = [...new Set(abertos.map((a) => (a.DOCUMENTO ?? '').trim()).filter(Boolean))];
-    const quitIdx = new Map<string, Quitado>(); // chave: numero|cnpjCedente|cnpjSacado|sistema
+    // chave → SOMA do LIQUIDADO: o mesmo número pode ter VÁRIAS quitações
+    // (parcelas/reapresentações com vencimentos diferentes) — todas contam.
+    const quitIdx = new Map<string, number>(); // chave: numero|cnpjCedente|cnpjSacado|sistema
     for (let i = 0; i < docs.length; i += 500) {
       const lote = docs.slice(i, i + 500);
       const params: Record<string, unknown> = {};
@@ -427,7 +429,8 @@ export class RelatoriosService {
       for (const r of rows) {
         const n = (r.NUMERO ?? '').trim();
         if (!n) continue;
-        quitIdx.set(chave(n, r.DOC_CEDENTE, r.DOC_SACADO, r.SISTEMA), r);
+        const k = chave(n, r.DOC_CEDENTE, r.DOC_SACADO, r.SISTEMA);
+        quitIdx.set(k, (quitIdx.get(k) ?? 0) + (Number(r.LIQUIDADO) || 0));
       }
     }
 
@@ -442,7 +445,7 @@ export class RelatoriosService {
       const k = chave((a.DOCUMENTO ?? '').trim(), a.DOC_CEDENTE, a.DOC_SACADO, a.SISTEMA);
       if (quitIdx.has(k) && !agg.chavesQuit.has(k)) {
         agg.chavesQuit.add(k);
-        agg.quitado += Number(quitIdx.get(k)?.LIQUIDADO) || 0;
+        agg.quitado += quitIdx.get(k) ?? 0;
       }
       porCed.set(ced, agg);
     }
