@@ -228,6 +228,9 @@ export class RelatoriosService {
 
   private readonly pngState = new Map<string, PngState>();
   private store_?: RelatorioStore;
+  // cedentes do último print do Abertos — Geral (p/ a msg de parciais na sequência).
+  // Em memória porque no Docker o worker gera os PNGs sem filesystem compartilhado.
+  private cedentesAbertosGeral: string[] | null = null;
   // Execução PARALELA com teto de concorrência. Os filtros do BI são por sessão/
   // contexto (cada captura abre seu próprio navegador isolado — validado), então
   // rodar em paralelo é seguro; o teto só evita sobrecarregar a máquina.
@@ -321,13 +324,20 @@ export class RelatoriosService {
         signal: ctrl.signal,
       });
       const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean; images?: string[]; stderr?: string; error?: string; code?: number;
+        ok?: boolean; images?: string[]; stderr?: string; error?: string; code?: number; cedentes?: string[];
       };
       if (!res.ok || !data.ok || !data.images?.length) {
         const motivo = data.error || (data.images && !data.images.length ? 'sem imagens' : `código ${data.code ?? res.status}`);
         this.logger.error(`PNG ${id} (worker) falhou: ${motivo} ${(data.stderr ?? '').slice(-500)}`);
         this.pngState.set(id, { status: 'erro', imagens: [], erro: `falha na geração (${motivo})` });
         return;
+      }
+      // cedentes do --dump-cedentes voltam na resposta (sem filesystem compartilhado)
+      const cedentes = (data.cedentes ?? []).map((c) => String(c).trim()).filter(Boolean);
+      this.logarCedentes(id, cedentes);
+      if (id === 'titulos_abertos_geral' && cedentes.length) {
+        this.cedentesAbertosGeral = cedentes;
+        void this.analisarParciais(id, job.outBase, cedentes);
       }
       await this.salvarResultado(id, data.images.map((b64) => Buffer.from(b64, 'base64')));
     } catch (err) {
@@ -465,15 +475,21 @@ export class RelatoriosService {
   }
 
   /** Mensagem "Títulos Pagos Parcialmente" p/ o envio em sequência. Usa os
-   *  cedentes do ÚLTIMO print do Títulos Abertos — Geral (print_abertos.cedentes.txt,
-   *  escrito pelo --dump-cedentes). Null se a lista não existir. */
+   *  cedentes do ÚLTIMO print do Títulos Abertos — Geral: do cache em memória
+   *  (Docker/worker) ou do print_abertos.cedentes.txt (dev local, sobrevive a
+   *  restart). Null se não houver lista. */
   private async textoParciais(): Promise<string | null> {
-    const arq = path.join(this.scriptsDir(), 'print_abertos.cedentes.txt');
-    if (!fs.existsSync(arq)) {
-      this.logger.warn('PARCIAIS (sequência): print_abertos.cedentes.txt não existe — gere o Títulos Abertos Geral antes');
+    let cedentes = this.cedentesAbertosGeral ?? [];
+    if (!cedentes.length) {
+      const arq = path.join(this.scriptsDir(), 'print_abertos.cedentes.txt');
+      if (fs.existsSync(arq)) {
+        cedentes = fs.readFileSync(arq, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      }
+    }
+    if (!cedentes.length) {
+      this.logger.warn('PARCIAIS (sequência): sem lista de cedentes — gere o Títulos Abertos Geral antes');
       return null;
     }
-    const cedentes = fs.readFileSync(arq, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     const parciais = await this.calcularParciais(cedentes);
     const titulo = '*TÍTULOS PAGOS PARCIALMENTE*';
     if (!parciais.length) return `${titulo}\n\nNenhum título com pagamento parcial identificado.`;
@@ -506,6 +522,7 @@ export class RelatoriosService {
         const cedentes = this.extrairCedentes(stdout); // do --dump-cedentes (se houver)
         this.logarCedentes(id, cedentes);
         if (code === 0 && id === 'titulos_abertos_geral' && cedentes.length) {
+          this.cedentesAbertosGeral = cedentes;
           // análise de pagamento parcial (fire-and-forget; não atrasa o salvar do PNG)
           void this.analisarParciais(id, job.outBase, cedentes);
         }

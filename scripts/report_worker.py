@@ -7,7 +7,9 @@ e apaga os arquivos. Sem volume compartilhado de filesystem com o backend.
 
 Endpoints:
   GET  /health  -> 200 {"ok": true}
-  POST /run     -> {"ok", "code", "stderr", "images": [base64, ...]}
+  POST /run     -> {"ok", "code", "stderr", "images": [base64, ...], "cedentes": [...]}
+                   ("cedentes" sai do <outBase>.cedentes.txt gerado pelo
+                    --dump-cedentes; o backend usa p/ a análise de parciais)
 """
 from __future__ import annotations
 import base64
@@ -46,7 +48,20 @@ def run_job(script: str, args: list[str], out_base: str) -> dict:
             p.unlink()
         except OSError:
             pass
-    return {"ok": bool(images), "code": 0, "stderr": proc.stderr[-2000:], "images": images}
+
+    # Lista de cedentes do --dump-cedentes (<out_base>.cedentes.txt), se houver.
+    cedentes: list[str] = []
+    ced_txt = SCRIPTS / f"{out_base}.cedentes.txt"
+    if ced_txt.exists():
+        try:
+            cedentes = [l.strip() for l in ced_txt.read_text(encoding="utf-8").splitlines() if l.strip()]
+        except OSError:
+            pass
+        try:
+            ced_txt.unlink()
+        except OSError:
+            pass
+    return {"ok": bool(images), "code": 0, "stderr": proc.stderr[-2000:], "images": images, "cedentes": cedentes}
 
 
 class Handler(BaseHTTPRequestHandler):
