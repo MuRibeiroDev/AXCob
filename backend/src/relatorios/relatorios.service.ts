@@ -376,61 +376,89 @@ export class RelatoriosService {
    *  Mesma manha do kanban (quitado_parcial), no sentido inverso. Saída: log +
    *  scripts/<outBase>.parciais.txt. Nunca derruba a geração do PNG. */
   // Tipos de título considerados na análise de pagamento parcial (whitelist).
-  private static readonly TIPOS_PARCIAL = "'CCB','CHQ','CTR','DMR','DSR','NCO','NPP','CPR'";
+  private static readonly TIPOS_PARCIAL = "'CCB','CTR','DMR','DSR','NCO','NPP','CPR'";
 
   /** Cruza vencidos × quitados dos cedentes e devolve o resumo por cedente
-   *  (vencido, quitado parcial e qtd de títulos parciais). */
+   *  (vencido, quitado parcial e qtd de títulos parciais).
+   *
+   *  Regras (fechadas com a operação em 12/06/2026):
+   *  - SÓ títulos com vencimento NO PERÍODO do relatório Geral (último dia útil
+   *    + não-úteis órfãos anteriores) — não a carteira vencida histórica;
+   *  - SEM filtro de flexibilização: em carência ou não, aparece;
+   *  - match por número + CNPJ cedente + CNPJ sacado + sistema + OP;
+   *  - recompra/repasse (SITUACAO Recomprado%/Repassado%) NÃO conta como
+   *    pagamento — é o cedente cobrindo, não o sacado pagando;
+   *  - só conta RECIBO PARCIAL (LIQUIDADO < 99% do VALOR_FACE) — baixa
+   *    integral de parcela com o mesmo número não é pagamento parcial.
+   *  Doc completa: docs/relatorio-pagamentos-parciais.md */
   private async calcularParciais(cedentes: string[]): Promise<{ cedente: string; vencido: number; quitado: number; qtd: number }[]> {
     if (!cedentes.length) return [];
     const digitos = (c: string) => `REPLACE(REPLACE(REPLACE(REPLACE(${c},'.',''),'/',''),'-',''),' ','')`;
     const tipos = RelatoriosService.TIPOS_PARCIAL;
 
-    // 1) títulos vencidos dos cedentes (mesmos filtros do relatório), em lotes
-    interface Aberto { DOCUMENTO: string; CEDENTE: string; DOC_SACADO: string | null; DOC_CEDENTE: string | null; SISTEMA: string | null; VALOR: number }
+    // período do relatório Geral: último dia útil + não-úteis órfãos anteriores
+    const janela = vencsNoPrazo(hojeLocal());
+    const ini = fmtIso(janela[0]);
+    const fim = fmtIso(janela[janela.length - 1]);
+
+    // 1) títulos abertos dos cedentes com vencimento NO período, em lotes
+    interface Aberto { DOCUMENTO: string; CEDENTE: string; DOC_SACADO: string | null; DOC_CEDENTE: string | null; SISTEMA: string | null; OP: number | string | null; VALOR: number }
     const abertos: Aberto[] = [];
     for (let i = 0; i < cedentes.length; i += 200) {
       const lote = cedentes.slice(i, i + 200).map((n) => n.trim().toUpperCase());
-      const params: Record<string, unknown> = {};
+      const params: Record<string, unknown> = { ini, fim };
       const marks = lote.map((n, j) => { params[`c${j}`] = n; return `@c${j}`; });
       abertos.push(...await this.db.query<Aberto>(`
         SELECT DOCUMENTO, CEDENTE, ${digitos('CPF_CNPJ_SACADO')} AS DOC_SACADO,
-               ${digitos('CPF_CNPJ_CEDENTE')} AS DOC_CEDENTE, SISTEMA,
+               ${digitos('CPF_CNPJ_CEDENTE')} AS DOC_CEDENTE, SISTEMA, OP,
                CAST(VALOR AS float) AS VALOR
         FROM data_core.vw_titulos_abertos
-        WHERE VENCIMENTO < CAST(GETDATE() AS DATE)
+        WHERE VENCIMENTO BETWEEN @ini AND @fim
           AND M = 'C'
           AND TIPO IN (${tipos})
           AND UPPER(LTRIM(RTRIM(CEDENTE))) IN (${marks.join(',')})`, params));
     }
+    this.logger.log(`PARCIAIS: período ${ini}..${fim} | títulos abertos no período: ${abertos.length}`);
     if (!abertos.length) return [];
 
-    // 2) cruza com quitados (lotes de DOCUMENTO). Match ESTRITO por número +
-    //    CNPJ do cedente + CNPJ do sacado + SISTEMA — números se repetem entre
-    //    operações/sacados (falso parcial) e quitação em OUTRO veículo
-    //    (ex.: FIDC→Securitizadora) é rolagem/renegociação, não parcial.
-    interface Quitado { NUMERO: string; DOC_SACADO: string | null; DOC_CEDENTE: string | null; SISTEMA: string | null; LIQUIDADO: number | null }
-    const chave = (numero: string, docCed: string | null | undefined, docSac: string | null | undefined, sistema: string | null | undefined) =>
-      `${numero}|${docCed ?? ''}|${docSac ?? ''}|${(sistema ?? '').trim().toUpperCase()}`;
+    // 3) cruza com quitados (lotes de DOCUMENTO). Match ESTRITO por número +
+    //    CNPJ do cedente + CNPJ do sacado + SISTEMA + OP:
+    //    - números se repetem entre operações/sacados (falso parcial);
+    //    - quitação em OUTRO veículo (FIDC→SEC) é rolagem, não parcial;
+    //    - a OP amarra o título à MESMA operação — sem ela, números tipo
+    //      CPF/parcela (IPM) casam quitações de safras passadas do mesmo sacado.
+    interface Quitado { NUMERO: string; DOC_SACADO: string | null; DOC_CEDENTE: string | null; SISTEMA: string | null; OP: number | string | null; VALOR_FACE: number | null; LIQUIDADO: number | null }
+    const op = (v: number | string | null | undefined) => String(v ?? '').replace(/\D/g, '');
+    const chave = (numero: string, docCed: string | null | undefined, docSac: string | null | undefined, sistema: string | null | undefined, opVal: number | string | null | undefined) =>
+      `${numero}|${docCed ?? ''}|${docSac ?? ''}|${(sistema ?? '').trim().toUpperCase()}|${op(opVal)}`;
     const docs = [...new Set(abertos.map((a) => (a.DOCUMENTO ?? '').trim()).filter(Boolean))];
     // chave → SOMA do LIQUIDADO: o mesmo número pode ter VÁRIAS quitações
     // (parcelas/reapresentações com vencimentos diferentes) — todas contam.
-    const quitIdx = new Map<string, number>(); // chave: numero|cnpjCedente|cnpjSacado|sistema
+    const quitIdx = new Map<string, number>(); // chave: numero|cnpjCed|cnpjSac|sistema|op
     for (let i = 0; i < docs.length; i += 500) {
       const lote = docs.slice(i, i + 500);
       const params: Record<string, unknown> = {};
       const marks = lote.map((n, j) => { params[`n${j}`] = n; return `@n${j}`; });
       const rows = await this.db.query<Quitado>(`
         SELECT NUMERO, ${digitos('CPF_CNPJ_SACADO')} AS DOC_SACADO,
-               ${digitos('CPF_CNPJ_CEDENTE')} AS DOC_CEDENTE, SISTEMA,
-               CAST(LIQUIDADO AS float) AS LIQUIDADO
+               ${digitos('CPF_CNPJ_CEDENTE')} AS DOC_CEDENTE, SISTEMA, OP,
+               CAST(VALOR_FACE AS float) AS VALOR_FACE, CAST(LIQUIDADO AS float) AS LIQUIDADO
         FROM data_core.vw_titulos_quitados
         WHERE TIPO IN (${tipos})
+          AND SITUACAO NOT LIKE 'Recomprado%'
+          AND SITUACAO NOT LIKE 'Repassado%'
           AND NUMERO IN (${marks.join(',')})`, params);
       for (const r of rows) {
         const n = (r.NUMERO ?? '').trim();
-        if (!n) continue;
-        const k = chave(n, r.DOC_CEDENTE, r.DOC_SACADO, r.SISTEMA);
-        quitIdx.set(k, (quitIdx.get(k) ?? 0) + (Number(r.LIQUIDADO) || 0));
+        if (!n || !op(r.OP)) continue; // sem OP não há como amarrar à operação
+        // regra do RECIBO PARCIAL: o próprio registro de quitação precisa ser
+        // parcial (liquidado < 99% da face). Baixa integral = outra parcela
+        // com o mesmo número, não pagamento parcial do título em aberto.
+        const face = Number(r.VALOR_FACE) || 0;
+        const liq = Number(r.LIQUIDADO) || 0;
+        if (!(face > 0 && liq < face * 0.99)) continue;
+        const k = chave(n, r.DOC_CEDENTE, r.DOC_SACADO, r.SISTEMA, r.OP);
+        quitIdx.set(k, (quitIdx.get(k) ?? 0) + liq);
       }
     }
 
@@ -442,7 +470,7 @@ export class RelatoriosService {
       const ced = (a.CEDENTE ?? '').trim();
       const agg = porCed.get(ced) ?? { vencido: 0, quitado: 0, chavesQuit: new Set<string>() };
       agg.vencido += Number(a.VALOR) || 0;
-      const k = chave((a.DOCUMENTO ?? '').trim(), a.DOC_CEDENTE, a.DOC_SACADO, a.SISTEMA);
+      const k = chave((a.DOCUMENTO ?? '').trim(), a.DOC_CEDENTE, a.DOC_SACADO, a.SISTEMA, a.OP);
       if (quitIdx.has(k) && !agg.chavesQuit.has(k)) {
         agg.chavesQuit.add(k);
         agg.quitado += quitIdx.get(k) ?? 0;
@@ -494,11 +522,12 @@ export class RelatoriosService {
       return null;
     }
     const parciais = await this.calcularParciais(cedentes);
-    const titulo = '*TÍTULOS PAGOS PARCIALMENTE*';
-    if (!parciais.length) return `${titulo}\n\nNenhum título com pagamento parcial identificado.`;
-    const blocos = parciais.map((p) =>
-      `*${p.cedente}* - ${p.qtd} título(s)\n\n*VENCIDO:* ${this.fmtBRL(p.vencido)}\n*QUITADO:* ${this.fmtBRL(p.quitado)}`);
-    return `${titulo}\n\n${blocos.join('\n\n')}`;
+    // formato fechado em 12/06/2026: sem cabeçalho, uma linha por cedente,
+    // frase fixa. Sem nenhum parcial → não envia nada (retorna null).
+    if (!parciais.length) return null;
+    return parciais
+      .map((p) => `*${p.cedente}* - Já estava na cobrança, houve abatimento parcial.`)
+      .join('\n');
   }
 
   /** Gera o PNG executando o script Python localmente (fallback p/ dev). */
