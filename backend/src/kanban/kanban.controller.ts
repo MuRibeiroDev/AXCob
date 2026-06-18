@@ -87,4 +87,25 @@ export class KanbanController {
     const webhook = Number.isFinite(userId) ? await this.cfg.webhookDoUsuario(userId) : null;
     return this.service.moverCard(body.cardId, body.stageId, body.comentario, webhook);
   }
+
+  /** Move um card de PIX (SPA 1248) + comentário e anexos (fotos) no timeline.
+   *  Usa o webhook do usuário logado (sai no nome dele). */
+  @Post('pix/mover')
+  async moverPix(
+    @Req() req: any,
+    @Body() body: { cardId?: number | string; stageId?: string; comentario?: string; anexos?: { nome: string; base64: string }[] },
+  ) {
+    if (!body?.cardId || !body?.stageId) {
+      throw new BadRequestException('cardId e stageId são obrigatórios.');
+    }
+    if (!/^DT1248_146:[A-Z0-9_]+$/.test(body.stageId)) {
+      throw new BadRequestException('stageId de PIX inválido.');
+    }
+    const anexos = (body.anexos ?? [])
+      .filter((a) => a && a.nome && a.base64)
+      .map((a) => ({ nome: String(a.nome), base64: String(a.base64) }));
+    const userId = Number(req.user?.sub ?? req.user?.id);
+    const webhook = Number.isFinite(userId) ? await this.cfg.webhookDoUsuario(userId) : null;
+    return this.service.moverCardPix(body.cardId, body.stageId, body.comentario, anexos, webhook);
+  }
 }

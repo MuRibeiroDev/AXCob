@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../database/database.service';
 import { BitrixService, type NormalizedCard } from '../bitrix/bitrix.service';
-import { PIPELINES } from '../bitrix/bitrix.types';
+import { PIPELINES, PIX_PIPELINE } from '../bitrix/bitrix.types';
 
 export type PipelineKey = 'protesto' | 'negativacao';
 type Status = 'quitado_pronto' | 'quitado_parcial' | 'nao_quitado';
@@ -96,6 +96,26 @@ export class KanbanService {
     if (comentario?.trim()) await this.bitrix.adicionarComentario(cardId, comentario.trim(), webhook);
     this.cache.clear();
     this.logger.log(`card ${cardId} movido p/ ${stageId}${comentario ? ' (+comentário)' : ''}${webhook ? ' (webhook do usuário)' : ''}`);
+    return { ok: true };
+  }
+
+  /** Move um card de PIX (SPA Financeiro 1248) e, se houver, adiciona comentário
+   *  no timeline COM anexos (fotos). Limpa o cache do PIX. */
+  async moverCardPix(
+    cardId: number | string,
+    stageId: string,
+    comentario?: string,
+    anexos?: { nome: string; base64: string }[],
+    webhook?: string | null,
+  ) {
+    const ent = PIX_PIPELINE.entityTypeId;
+    await this.bitrix.moverEtapa(cardId, stageId, webhook, ent);
+    const temComentario = !!comentario?.trim() || !!anexos?.length;
+    if (temComentario) {
+      await this.bitrix.adicionarComentario(cardId, (comentario ?? '').trim(), webhook, ent, anexos);
+    }
+    this.pixCache = null;
+    this.logger.log(`pix ${cardId} movido p/ ${stageId}${comentario?.trim() ? ' (+comentário)' : ''}${anexos?.length ? ` (+${anexos.length} anexo)` : ''}`);
     return { ok: true };
   }
 

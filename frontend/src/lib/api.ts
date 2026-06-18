@@ -92,6 +92,8 @@ export const api = {
   pixStageMore: (stageId: string, start: number) =>
     req<{ cards: PixCard[]; total: number; next: number | null }>(
       `/kanban/pix/stage/${encodeURIComponent(stageId)}?start=${start}`),
+  moverCardPix: (cardId: number | string, stageId: string, comentario?: string, anexos?: { nome: string; base64: string }[]) =>
+    post<{ ok: boolean }>('/kanban/pix/mover', { cardId, stageId, comentario, anexos }),
   identificarPix: (titulo: string, opts?: { cardId?: string | number; doc?: string; refresh?: boolean }) =>
     post<ConciliacaoResultado>('/kanban/pix/identificar', { titulo, ...opts }),
   listConciliacoesPix: () => req<ConciliacaoSalva[]>('/kanban/pix/conciliacoes'),

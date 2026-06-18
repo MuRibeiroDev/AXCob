@@ -49,19 +49,26 @@ const STAGE_BORDER: Record<string, string> = {
   'DT1248_146:SUCCESS': 'var(--green-500)',
 };
 
-function Card({ card, onIdentificar, identificando, analisado }: { card: PixCard; onIdentificar?: () => void; identificando?: boolean; analisado?: boolean }) {
+function Card({ card, onIdentificar, identificando, analisado, onDragStart, onDragEnd, dragging }: {
+  card: PixCard; onIdentificar?: () => void; identificando?: boolean; analisado?: boolean;
+  onDragStart?: () => void; onDragEnd?: () => void; dragging?: boolean;
+}) {
   const border = STAGE_BORDER[card.stage_id] ?? 'var(--ink-300)';
   return (
     <div
       role="button"
       tabIndex={0}
+      draggable
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart?.(); }}
+      onDragEnd={() => onDragEnd?.()}
       onClick={() => window.open(card.card_link, '_blank', 'noopener')}
-      title="Clique para abrir no Bitrix"
+      title="Arraste para mover de etapa · clique para abrir no Bitrix"
       style={{
-        textAlign: 'left', width: '100%', font: 'inherit', cursor: 'pointer', boxSizing: 'border-box',
+        textAlign: 'left', width: '100%', font: 'inherit', cursor: 'grab', boxSizing: 'border-box',
         background: 'var(--white)', border: '1px solid var(--line)',
         borderLeft: `4px solid ${border}`, borderRadius: 10, padding: '10px 12px',
         boxShadow: 'var(--sh-sm)', transition: 'box-shadow .15s', display: 'block',
+        opacity: dragging ? 0.4 : 1,
       }}
       onMouseEnter={(e) => (e.currentTarget.style.boxShadow = '0 6px 16px rgba(16,35,27,.10)')}
       onMouseLeave={(e) => (e.currentTarget.style.boxShadow = 'var(--sh-sm)')}
@@ -97,20 +104,29 @@ function Card({ card, onIdentificar, identificando, analisado }: { card: PixCard
   );
 }
 
-function Column({ stage, onIdentificar, identificandoId, analisadoIds, onCarregarMais, carregandoMais }: {
+function Column({ stage, onIdentificar, identificandoId, analisadoIds, onCarregarMais, carregandoMais, onDropCard, onDragStartCard, onDragEndCard, draggingId }: {
   stage: PixKanbanData['stages'][number];
   onIdentificar?: (card: PixCard) => void;
   identificandoId?: string | number | null;
   analisadoIds?: Set<string>;
   onCarregarMais?: (stageId: string) => void;
   carregandoMais?: boolean;
+  onDropCard?: (stageId: string) => void;
+  onDragStartCard?: (card: PixCard, fromStageId: string) => void;
+  onDragEndCard?: () => void;
+  draggingId?: string | number | null;
 }) {
+  const [over, setOver] = useState(false);
   return (
     <div
+      onDragOver={(e) => { if (onDropCard) { e.preventDefault(); if (!over) setOver(true); } }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false); }}
+      onDrop={(e) => { if (!onDropCard) return; e.preventDefault(); setOver(false); onDropCard(stage.id); }}
       style={{
         display: 'flex', flexDirection: 'column', minHeight: 0,
-        background: 'var(--paper)', border: '1px solid var(--line)',
-        borderRadius: 12, padding: 10,
+        background: over ? 'var(--green-50)' : 'var(--paper)',
+        border: `1px solid ${over ? 'var(--green-400)' : 'var(--line)'}`,
+        borderRadius: 12, padding: 10, transition: 'background .12s, border-color .12s',
       }}
     >
       <div
@@ -148,6 +164,9 @@ function Column({ stage, onIdentificar, identificandoId, analisadoIds, onCarrega
               onIdentificar={onIdentificar ? () => onIdentificar(c) : undefined}
               identificando={identificandoId === c.id}
               analisado={analisadoIds?.has(String(c.id))}
+              onDragStart={() => onDragStartCard?.(c, stage.id)}
+              onDragEnd={onDragEndCard}
+              dragging={draggingId === c.id}
             />
           ))
         )}
@@ -291,6 +310,131 @@ function ConciliacaoModal({ estado, onClose, onReanalisar }: {
   );
 }
 
+type Anexo = { nome: string; base64: string; preview: string };
+
+function MoverModal({ estado, movendo, onClose, onConfirmar }: {
+  estado: { card: PixCard; toStageId: string; toStageNome: string };
+  movendo: boolean;
+  onClose: () => void;
+  onConfirmar: (comentario: string, anexos: { nome: string; base64: string }[]) => void;
+}) {
+  const [comentario, setComentario] = useState('');
+  const [anexos, setAnexos] = useState<Anexo[]>([]);
+  const [coladoOk, setColadoOk] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const addFiles = useCallback(async (files: File[]) => {
+    const novos: Anexo[] = [];
+    for (const f of files) {
+      if (!f.type.startsWith('image/')) continue;
+      const dataUrl: string = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(String(r.result));
+        r.onerror = rej;
+        r.readAsDataURL(f);
+      });
+      // imagem colada costuma vir sem nome ("image.png") → gera um único
+      const nome = f.name && f.name !== 'image.png' ? f.name : `colado-${Date.now()}.${(f.type.split('/')[1] || 'png')}`;
+      novos.push({ nome, base64: dataUrl.split(',')[1] ?? '', preview: dataUrl });
+    }
+    if (novos.length) setAnexos((a) => [...a, ...novos]);
+    return novos.length;
+  }, []);
+
+  // Ctrl+V: cola imagem(ns) do clipboard enquanto o modal está aberto
+  useEffect(() => {
+    const onPaste = async (e: ClipboardEvent) => {
+      const imgs = Array.from(e.clipboardData?.items ?? [])
+        .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+        .map((it) => it.getAsFile())
+        .filter((f): f is File => !!f);
+      if (!imgs.length) return;
+      e.preventDefault(); // não cola o binário dentro do textarea
+      const n = await addFiles(imgs);
+      if (n) { setColadoOk(true); setTimeout(() => setColadoOk(false), 1500); }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [addFiles]);
+
+  const podeMover = !movendo && (comentario.trim().length > 0 || anexos.length > 0);
+
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget && !movendo) onClose(); }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(16,35,27,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 80, padding: 24 }}
+    >
+      <div className="fade-in" style={{ width: 'min(520px, 100%)', background: 'var(--white)', borderRadius: 14, boxShadow: 'var(--sh-lg)', overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Icon name="message" size={17} style={{ color: 'var(--green-600)' }} />
+          <div style={{ lineHeight: 1.2, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>Mover para “{estado.toStageNome}”</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {estado.card.nome || estado.card.titulo_card || '—'}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: 20 }}>
+          <label style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-700)', display: 'block', marginBottom: 7 }}>
+            Comentário (registrado no timeline do card no Bitrix)
+          </label>
+          <textarea
+            autoFocus
+            value={comentario}
+            onChange={(e) => setComentario(e.target.value)}
+            placeholder="Escreva o comentário…"
+            rows={4}
+            style={{ width: '100%', resize: 'vertical', font: 'inherit', fontSize: 13, color: 'var(--ink-900)', border: '1px solid var(--line)', borderRadius: 9, padding: '10px 12px', outline: 'none', boxSizing: 'border-box' }}
+          />
+
+          {/* anexos */}
+          <div style={{ marginTop: 12 }}>
+            <input
+              ref={inputRef} type="file" accept="image/*" multiple hidden
+              onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.currentTarget.value = ''; }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => inputRef.current?.click()} disabled={movendo}>
+                <Icon name="doc" size={14} /> Anexar foto
+              </button>
+              <span style={{ fontSize: 11, color: coladoOk ? 'var(--green-700)' : 'var(--ink-400)' }}>
+                {coladoOk ? '✓ imagem colada' : 'ou cole com Ctrl+V'}
+              </span>
+            </div>
+            {anexos.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+                {anexos.map((a, i) => (
+                  <div key={i} style={{ position: 'relative', width: 64, height: 64, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--line)' }}>
+                    <img src={a.preview} alt={a.nome} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <button
+                      type="button" title="Remover"
+                      onClick={() => setAnexos((arr) => arr.filter((_, j) => j !== i))}
+                      style={{ position: 'absolute', top: 2, right: 2, width: 18, height: 18, borderRadius: 999, border: 'none', background: 'rgba(16,35,27,.7)', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, lineHeight: 1 }}
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{ padding: '0 20px 18px', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} disabled={movendo}>Cancelar</button>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => onConfirmar(comentario.trim(), anexos.map(({ nome, base64 }) => ({ nome, base64 })))}
+            disabled={!podeMover}
+          >
+            <Icon name={movendo ? 'history' : 'check'} size={14} className={movendo ? 'spin' : undefined} />
+            {movendo ? 'Movendo…' : 'Mover'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PixPage() {
   const [data, setData] = useState<PixKanbanData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -380,6 +524,36 @@ export function PixPage() {
 
   useEffect(() => { load(false); }, [load]);
 
+  // drag-and-drop entre etapas → modal de comentário + anexo antes de mover
+  const dragRef = useRef<{ card: PixCard; fromStageId: string } | null>(null);
+  const [draggingId, setDraggingId] = useState<string | number | null>(null);
+  const [moverModal, setMoverModal] = useState<{ card: PixCard; toStageId: string; toStageNome: string } | null>(null);
+  const [movendo, setMovendo] = useState(false);
+
+  const onDragStartCard = useCallback((card: PixCard, fromStageId: string) => {
+    dragRef.current = { card, fromStageId };
+    setDraggingId(card.id);
+  }, []);
+  const onDragEndCard = useCallback(() => { dragRef.current = null; setDraggingId(null); }, []);
+
+  const onDropCard = useCallback((toStageId: string) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    setDraggingId(null);
+    if (!drag || drag.fromStageId === toStageId) return;
+    const nome = data?.stages.find((s) => s.id === toStageId)?.nome ?? toStageId;
+    setMoverModal({ card: drag.card, toStageId, toStageNome: nome });
+  }, [data]);
+
+  const confirmarMover = useCallback((comentario: string, anexos: { nome: string; base64: string }[]) => {
+    if (!moverModal) return;
+    setMovendo(true);
+    api.moverCardPix(moverModal.card.id, moverModal.toStageId, comentario || undefined, anexos.length ? anexos : undefined)
+      .then(() => { setMoverModal(null); load(true); })
+      .catch((e) => setError(e.message))
+      .finally(() => setMovendo(false));
+  }, [moverModal, load]);
+
   const abertoPorOpcoes = useMemo(
     () => (data ? [...new Set(data.stages.flatMap((s) => s.cards.map((c) => c.criado_por)).filter((x) => x && x !== '—'))].sort() : []),
     [data],
@@ -412,7 +586,7 @@ export function PixPage() {
           <div style={{ lineHeight: 1.15 }}>
             <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '-.01em' }}>PIX a Identificar</div>
             <div style={{ fontSize: 11, color: 'var(--ink-400)', fontWeight: 500 }}>
-              Espelho read-only do pipeline Financeiro do Bitrix
+              Arraste um card para mover de etapa (comentário e foto opcionais)
             </div>
           </div>
         </div>
@@ -506,6 +680,10 @@ export function PixPage() {
                   analisadoIds={analisadoIds}
                   onCarregarMais={carregarMais}
                   carregandoMais={carregandoMais.has(stage.id)}
+                  onDropCard={onDropCard}
+                  onDragStartCard={onDragStartCard}
+                  onDragEndCard={onDragEndCard}
+                  draggingId={draggingId}
                 />
               ))}
             </div>
@@ -518,6 +696,15 @@ export function PixPage() {
           estado={resultado}
           onClose={() => setResultado(null)}
           onReanalisar={() => identificar(resultado.card, true)}
+        />
+      )}
+
+      {moverModal && (
+        <MoverModal
+          estado={moverModal}
+          movendo={movendo}
+          onClose={() => setMoverModal(null)}
+          onConfirmar={confirmarMover}
         />
       )}
     </div>

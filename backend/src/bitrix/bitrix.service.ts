@@ -412,11 +412,12 @@ export class BitrixService {
     return out.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
   }
 
-  /** Move o card para outra etapa (crm.item.update). `webhook` (do usuário
-   *  logado) faz a movimentação sair com o nome dele no histórico. */
-  async moverEtapa(cardId: number | string, stageId: string, webhook?: string | null): Promise<void> {
+  /** Move o card para outra etapa (crm.item.update). `entityTypeId` define a SPA
+   *  (1200 = protesto/negativação, 1248 = PIX). `webhook` (do usuário logado)
+   *  faz a movimentação sair com o nome dele no histórico. */
+  async moverEtapa(cardId: number | string, stageId: string, webhook?: string | null, entityTypeId: number = ENTITY_TYPE_ID): Promise<void> {
     const res = await this.post('crm.item.update', {
-      entityTypeId: ENTITY_TYPE_ID,
+      entityTypeId,
       id: cardId,
       fields: { stageId },
     }, webhook);
@@ -426,11 +427,26 @@ export class BitrixService {
   }
 
   /** Adiciona comentário no timeline do card (crm.timeline.comment.add).
+   *  `entityTypeId` define a SPA (dynamic_<id>). `anexos` (opcional) são arquivos
+   *  no formato { nome, base64 } — vão no campo FILES como [nome, conteúdo].
    *  `webhook` (do usuário logado) faz o comentário sair com o nome dele. */
-  async adicionarComentario(cardId: number | string, comentario: string, webhook?: string | null): Promise<void> {
-    const res = await this.post('crm.timeline.comment.add', {
-      fields: { ENTITY_ID: cardId, ENTITY_TYPE: 'dynamic_1200', COMMENT: comentario },
-    }, webhook);
+  async adicionarComentario(
+    cardId: number | string,
+    comentario: string,
+    webhook?: string | null,
+    entityTypeId: number = ENTITY_TYPE_ID,
+    anexos?: { nome: string; base64: string }[],
+  ): Promise<void> {
+    const fields: Record<string, unknown> = {
+      ENTITY_ID: cardId,
+      ENTITY_TYPE: `dynamic_${entityTypeId}`,
+      COMMENT: comentario,
+    };
+    if (anexos?.length) {
+      // Bitrix aceita arquivo no timeline como [nomeArquivo, conteúdoBase64].
+      fields.FILES = anexos.map((a) => [a.nome, a.base64]);
+    }
+    const res = await this.post('crm.timeline.comment.add', { fields }, webhook);
     if (!res?.result) {
       throw new Error(res?.error_description || 'falha ao adicionar comentário no Bitrix');
     }
