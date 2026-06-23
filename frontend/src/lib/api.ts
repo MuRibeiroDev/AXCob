@@ -94,9 +94,13 @@ export const api = {
       `/kanban/pix/stage/${encodeURIComponent(stageId)}?start=${start}`),
   moverCardPix: (cardId: number | string, stageId: string, comentario?: string, anexos?: { nome: string; base64: string }[]) =>
     post<{ ok: boolean }>('/kanban/pix/mover', { cardId, stageId, comentario, anexos }),
+  comentarCardPix: (cardId: number | string, comentario?: string, anexos?: { nome: string; base64: string }[]) =>
+    post<{ ok: boolean }>('/kanban/pix/comentar', { cardId, comentario, anexos }),
   identificarPix: (titulo: string, opts?: { cardId?: string | number; doc?: string; refresh?: boolean }) =>
     post<ConciliacaoResultado>('/kanban/pix/identificar', { titulo, ...opts }),
   listConciliacoesPix: () => req<ConciliacaoSalva[]>('/kanban/pix/conciliacoes'),
+  titulosRelacionadosPix: (titulo: string, opts?: { ia?: boolean }) =>
+    post<PixTitulosRelacionados>('/kanban/pix/titulos-relacionados', { titulo, ...opts }),
   enviarSequenciaRelatorios: () =>
     post<{ ok: boolean; passos: { passo: string; ok: boolean; erro?: string }[]; faltando: string[] }>('/relatorios/enviar-sequencia', {}),
   agingCarteira: () => req<AgingData>('/relatorios/aging'),
@@ -223,4 +227,46 @@ export interface ConciliacaoSalva {
   titulo: string;
   resultado: ConciliacaoResultado;
   criadoEm: string;
+}
+
+export interface PixTituloRel {
+  documento: string;
+  tipo: string | null;
+  sistema: string | null;
+  situacao: string | null;
+  sacado: string | null;
+  cpf_cnpj_sacado: string | null;
+  cedente: string | null;
+  cpf_cnpj_cedente: string | null;
+  vencimento: string | null;
+  valor: number | null;
+  total: number | null;
+}
+
+export interface PixGrupoSacado {
+  sacado: string | null;
+  cpf_cnpj_sacado: string | null;
+  cedente: string | null;
+  cpf_cnpj_cedente: string | null;
+  sim: number;
+  qtd: number;
+  totalValor: number;
+  totalTotal: number;
+  titulos: PixTituloRel[];
+}
+
+export interface PixLadoRel {
+  grupos: PixGrupoSacado[];
+  qtdSacados: number;
+  qtdTitulos: number;
+  totalValor: number;
+  totalTotal: number;
+}
+
+export interface PixTitulosRelacionados {
+  nome: string;
+  comoSacado: PixLadoRel;
+  comoCedente: PixLadoRel;
+  truncado: boolean;
+  modo: 'heuristica' | 'ia';
 }

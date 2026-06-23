@@ -25,7 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent   # /app
 SCRIPTS = ROOT / "scripts"
 PORT = int(os.environ.get("WORKER_PORT", "8500"))
 # Só permite rodar os scripts de captura conhecidos (evita execução arbitrária).
-SCRIPT_OK = re.compile(r"^powerbi_[a-z]+\.py$")
+# Aceita underscores (ex.: powerbi_abertos_expandido.py, powerbi_quitados_expandido.py).
+SCRIPT_OK = re.compile(r"^powerbi_[a-z_]+\.py$")
 
 
 def run_job(script: str, args: list[str], out_base: str) -> dict:

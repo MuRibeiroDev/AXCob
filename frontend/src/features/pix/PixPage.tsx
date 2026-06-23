@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon } from '@/components/Icon';
 import { Popover } from '@/components/Popover';
-import { api, type ConciliacaoResultado, type PixCard, type PixKanbanData } from '@/lib/api';
+import { api, type ConciliacaoResultado, type PixCard, type PixGrupoSacado, type PixKanbanData, type PixLadoRel, type PixTitulosRelacionados } from '@/lib/api';
 import { fmtBRL, fmtDate } from '@/lib/format';
 
 // O botão "Identificar título" aparece SÓ na etapa "Financeiro: PIX à Identificar".
@@ -49,9 +49,10 @@ const STAGE_BORDER: Record<string, string> = {
   'DT1248_146:SUCCESS': 'var(--green-500)',
 };
 
-function Card({ card, onIdentificar, identificando, analisado, onDragStart, onDragEnd, dragging }: {
+function Card({ card, onIdentificar, identificando, analisado, onDragStart, onDragEnd, dragging, onComentar, onAbrir }: {
   card: PixCard; onIdentificar?: () => void; identificando?: boolean; analisado?: boolean;
-  onDragStart?: () => void; onDragEnd?: () => void; dragging?: boolean;
+  onDragStart?: () => void; onDragEnd?: () => void; dragging?: boolean; onComentar?: () => void;
+  onAbrir?: () => void;
 }) {
   const border = STAGE_BORDER[card.stage_id] ?? 'var(--ink-300)';
   return (
@@ -61,8 +62,9 @@ function Card({ card, onIdentificar, identificando, analisado, onDragStart, onDr
       draggable
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart?.(); }}
       onDragEnd={() => onDragEnd?.()}
-      onClick={() => window.open(card.card_link, '_blank', 'noopener')}
-      title="Arraste para mover de etapa · clique para abrir no Bitrix"
+      onClick={() => onAbrir?.()}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAbrir?.(); } }}
+      title="Arraste para mover de etapa · clique para ver os títulos relacionados"
       style={{
         textAlign: 'left', width: '100%', font: 'inherit', cursor: 'grab', boxSizing: 'border-box',
         background: 'var(--white)', border: '1px solid var(--line)',
@@ -80,7 +82,21 @@ function Card({ card, onIdentificar, identificando, analisado, onDragStart, onDr
         <span className="tnum" style={{ fontWeight: 700, color: 'var(--ink-900)', fontSize: 13 }}>
           {card.valor != null ? fmtBRL(card.valor) : '—'}
         </span>
-        {card.data && <span style={{ color: 'var(--ink-400)' }} className="tnum">{fmtDate(card.data)}</span>}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {card.data && <span style={{ color: 'var(--ink-400)' }} className="tnum">{fmtDate(card.data)}</span>}
+          {onComentar && (
+            <button
+              type="button"
+              title="Anexar foto / comentar no card"
+              onClick={(e) => { e.stopPropagation(); onComentar(); }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 7, border: '1px solid var(--line)', background: 'var(--white)', color: 'var(--ink-500)', cursor: 'pointer', flex: '0 0 auto' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover)'; e.currentTarget.style.color = 'var(--green-600)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--white)'; e.currentTarget.style.color = 'var(--ink-500)'; }}
+            >
+              <Icon name="doc" size={13} />
+            </button>
+          )}
+        </div>
       </div>
       {card.criado_por && card.criado_por !== '—' && (
         <div style={{ marginTop: 5, fontSize: 10.5, color: 'var(--ink-400)', display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -104,7 +120,7 @@ function Card({ card, onIdentificar, identificando, analisado, onDragStart, onDr
   );
 }
 
-function Column({ stage, onIdentificar, identificandoId, analisadoIds, onCarregarMais, carregandoMais, onDropCard, onDragStartCard, onDragEndCard, draggingId }: {
+function Column({ stage, onIdentificar, identificandoId, analisadoIds, onCarregarMais, carregandoMais, onDropCard, onDragStartCard, onDragEndCard, draggingId, onComentar, onAbrir }: {
   stage: PixKanbanData['stages'][number];
   onIdentificar?: (card: PixCard) => void;
   identificandoId?: string | number | null;
@@ -115,6 +131,8 @@ function Column({ stage, onIdentificar, identificandoId, analisadoIds, onCarrega
   onDragStartCard?: (card: PixCard, fromStageId: string) => void;
   onDragEndCard?: () => void;
   draggingId?: string | number | null;
+  onComentar?: (card: PixCard) => void;
+  onAbrir?: (card: PixCard) => void;
 }) {
   const [over, setOver] = useState(false);
   return (
@@ -167,6 +185,8 @@ function Column({ stage, onIdentificar, identificandoId, analisadoIds, onCarrega
               onDragStart={() => onDragStartCard?.(c, stage.id)}
               onDragEnd={onDragEndCard}
               dragging={draggingId === c.id}
+              onComentar={onComentar ? () => onComentar(c) : undefined}
+              onAbrir={onAbrir ? () => onAbrir(c) : undefined}
             />
           ))
         )}
@@ -313,11 +333,12 @@ function ConciliacaoModal({ estado, onClose, onReanalisar }: {
 type Anexo = { nome: string; base64: string; preview: string };
 
 function MoverModal({ estado, movendo, onClose, onConfirmar }: {
-  estado: { card: PixCard; toStageId: string; toStageNome: string };
+  estado: { card: PixCard; modo: 'mover' | 'comentar'; toStageId?: string; toStageNome?: string };
   movendo: boolean;
   onClose: () => void;
   onConfirmar: (comentario: string, anexos: { nome: string; base64: string }[]) => void;
 }) {
+  const isMover = estado.modo === 'mover';
   const [comentario, setComentario] = useState('');
   const [anexos, setAnexos] = useState<Anexo[]>([]);
   const [coladoOk, setColadoOk] = useState(false);
@@ -366,9 +387,9 @@ function MoverModal({ estado, movendo, onClose, onConfirmar }: {
     >
       <div className="fade-in" style={{ width: 'min(520px, 100%)', background: 'var(--white)', borderRadius: 14, boxShadow: 'var(--sh-lg)', overflow: 'hidden' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Icon name="message" size={17} style={{ color: 'var(--green-600)' }} />
+          <Icon name={isMover ? 'message' : 'doc'} size={17} style={{ color: 'var(--green-600)' }} />
           <div style={{ lineHeight: 1.2, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>Mover para “{estado.toStageNome}”</div>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>{isMover ? `Mover para “${estado.toStageNome}”` : 'Anexar foto / comentar'}</div>
             <div style={{ fontSize: 11.5, color: 'var(--ink-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {estado.card.nome || estado.card.titulo_card || '—'}
             </div>
@@ -427,8 +448,181 @@ function MoverModal({ estado, movendo, onClose, onConfirmar }: {
             disabled={!podeMover}
           >
             <Icon name={movendo ? 'history' : 'check'} size={14} className={movendo ? 'spin' : undefined} />
-            {movendo ? 'Movendo…' : 'Mover'}
+            {movendo ? 'Salvando…' : (isMover ? 'Mover' : 'Salvar')}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function fmtDoc(d: string | null): string {
+  const s = (d ?? '').replace(/\D+/g, '');
+  if (s.length === 11) return s.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  if (s.length === 14) return s.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
+  return d ?? '';
+}
+
+function GrupoSacadoCard({ grupo, modo, defaultOpen }: { grupo: PixGrupoSacado; modo: 'sacado' | 'cedente'; defaultOpen: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 11, overflow: 'hidden', background: 'var(--white)' }}>
+      <button
+        type="button" onClick={() => setOpen((o) => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', font: 'inherit', padding: '10px 12px' }}
+      >
+        <Icon name="chevron" size={14} style={{ color: 'var(--ink-400)', transform: open ? undefined : 'rotate(-90deg)', transition: 'transform .12s' }} />
+        <Icon name={modo === 'cedente' ? 'user' : 'building'} size={14} style={{ color: 'var(--ink-400)' }} />
+        <div style={{ flex: 1, minWidth: 0, lineHeight: 1.25 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-900)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {grupo.sacado || '—'}
+          </div>
+          {grupo.cpf_cnpj_sacado && <div className="tnum" style={{ fontSize: 10.5, color: 'var(--ink-400)' }}>{fmtDoc(grupo.cpf_cnpj_sacado)}</div>}
+        </div>
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-500)', background: 'var(--paper)', borderRadius: 999, padding: '2px 8px', border: '1px solid var(--line)', flex: '0 0 auto' }}>
+          {grupo.qtd} {grupo.qtd === 1 ? 'título' : 'títulos'}
+        </span>
+        <span className="tnum" style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-900)', flex: '0 0 auto' }}>
+          {fmtBRL(grupo.totalTotal || grupo.totalValor)}
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 12px 10px', borderTop: '1px solid var(--line)' }}>
+          {grupo.titulos.map((t) => (
+            <div key={t.documento} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12, padding: '5px 0', borderBottom: '1px dashed var(--line)' }}>
+              <span
+                className="mono-id"
+                onClick={(e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); e.stopPropagation(); window.open(biUrlTitulos([t.documento]), '_blank', 'noopener'); } }}
+                title="Ctrl + clique para abrir no BI filtrado por este título"
+                style={{ fontWeight: 700, color: 'var(--ink-900)', minWidth: 76, cursor: 'pointer' }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--green-600)')}
+                onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--ink-900)')}
+              >{t.documento}</span>
+              <span style={{ flex: 1, minWidth: 0, color: 'var(--ink-600)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ color: 'var(--ink-400)' }}>Cedente:</span> {t.cedente || '—'}
+                {t.sistema && <span style={{ color: 'var(--ink-300)' }}> · {t.sistema}</span>}
+              </span>
+              <span className="tnum" style={{ fontWeight: 700, color: 'var(--ink-900)' }}>{t.total != null ? fmtBRL(t.total) : (t.valor != null ? fmtBRL(t.valor) : '—')}</span>
+              {t.vencimento && <span className="tnum" style={{ color: 'var(--ink-400)', minWidth: 72, textAlign: 'right' }}>{fmtDate(t.vencimento)}</span>}
+            </div>
+          ))}
+          <div style={{ marginTop: 9 }}>
+            <a className="btn btn-ghost btn-sm" href={biUrlTitulos(grupo.titulos.map((t) => t.documento))} target="_blank" rel="noopener">
+              <Icon name="trend" size={13} /> Abrir no BI ({grupo.qtd})
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LadoSecao({ rotulo, descricao, lado, modo }: { rotulo: string; descricao: string; lado: PixLadoRel; modo: 'sacado' | 'cedente' }) {
+  if (!lado.qtdTitulos) return null;
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 13, color: 'var(--ink-900)' }}>{rotulo}</strong>
+        <span style={{ fontSize: 11.5, color: 'var(--ink-400)' }}>
+          {lado.qtdSacados} {lado.qtdSacados === 1 ? 'sacado' : 'sacados'} · {lado.qtdTitulos} {lado.qtdTitulos === 1 ? 'título' : 'títulos'} · <span className="tnum">{fmtBRL(lado.totalTotal || lado.totalValor)}</span>
+        </span>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--ink-400)', margin: '2px 0 10px' }}>{descricao}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {lado.grupos.map((g, i) => (
+          <GrupoSacadoCard key={(g.cpf_cnpj_sacado ?? g.sacado ?? '') + i} grupo={g} modo={modo} defaultOpen={lado.grupos.length <= 2 || i === 0} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TitulosModal({ estado, onClose, onRefinar, refinando, refineErro }: {
+  estado: { card: PixCard; data?: PixTitulosRelacionados; erro?: string };
+  onClose: () => void;
+  onRefinar: () => void;
+  refinando: boolean;
+  refineErro: string | null;
+}) {
+  const { card, data, erro } = estado;
+  const carregando = !data && !erro;
+  const vazio = !!data && !data.comoSacado.qtdTitulos && !data.comoCedente.qtdTitulos;
+  return (
+    <div
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(16,35,27,.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 80, padding: 24 }}
+    >
+      <div className="fade-in" style={{ width: 'min(720px, 100%)', maxHeight: '88vh', background: 'var(--white)', borderRadius: 14, boxShadow: 'var(--sh-lg)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '15px 20px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <Icon name="layers" size={17} style={{ color: 'var(--green-600)', marginTop: 2 }} />
+          <div style={{ lineHeight: 1.25, flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>Títulos relacionados</div>
+            <div style={{ fontSize: 11.5, color: 'var(--ink-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {data?.nome || card.nome || card.titulo_card || '—'}
+            </div>
+          </div>
+          <a className="btn btn-ghost btn-sm" href={card.card_link} target="_blank" rel="noopener">Abrir no Bitrix</a>
+          <button className="btn btn-quiet btn-sm" onClick={onClose}>Fechar</button>
+        </div>
+
+        <div style={{ padding: 20, overflowY: 'auto' }}>
+          {carregando && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '28px 0', color: 'var(--ink-400)', fontSize: 13.5 }}>
+              <Icon name="history" size={26} className="spin" style={{ color: 'var(--green-500)' }} />
+              Buscando títulos em aberto…
+            </div>
+          )}
+          {erro && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, color: 'var(--age-crit-fg)', fontSize: 13.5 }}>
+              <Icon name="alert" size={18} /> {erro}
+            </div>
+          )}
+          {data && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11.5, color: 'var(--ink-400)', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                {data.modo === 'ia'
+                  ? <><Icon name="check" size={13} style={{ color: 'var(--green-600)' }} /> Refinado por IA</>
+                  : 'Correspondência por nome — refine se vier amplo demais.'}
+              </span>
+              {data.modo === 'heuristica' && (
+                <button className="btn btn-ghost btn-sm" onClick={onRefinar} disabled={refinando}>
+                  <Icon name={refinando ? 'history' : 'bolt'} size={13} className={refinando ? 'spin' : undefined} />
+                  {refinando ? 'Refinando…' : 'Refinar com IA'}
+                </button>
+              )}
+            </div>
+          )}
+          {refineErro && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--age-crit-fg)', fontSize: 12.5, marginBottom: 12 }}>
+              <Icon name="alert" size={15} /> Falha ao refinar com IA: {refineErro}
+            </div>
+          )}
+          {vazio && (
+            <div style={{ fontSize: 13, color: 'var(--ink-500)', textAlign: 'center', padding: '18px 0' }}>
+              Nenhum título em aberto encontrado para esse nome (como sacado ou cedente).
+            </div>
+          )}
+          {data && !vazio && (
+            <>
+              <LadoSecao
+                rotulo="Como sacado"
+                descricao="Títulos em aberto em que esse nome é o sacado (devedor)."
+                lado={data.comoSacado}
+                modo="sacado"
+              />
+              <LadoSecao
+                rotulo="Como cedente"
+                descricao="Títulos em aberto em que esse nome é o cedente — agrupados pelos sacados (devedores)."
+                lado={data.comoCedente}
+                modo="cedente"
+              />
+              {data.truncado && (
+                <div style={{ fontSize: 11.5, color: 'var(--age-warn-fg)', display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+                  <Icon name="alert" size={14} /> Resultado parcial (muitos títulos) — refine pelo nome no card se faltar algo.
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -527,7 +721,7 @@ export function PixPage() {
   // drag-and-drop entre etapas → modal de comentário + anexo antes de mover
   const dragRef = useRef<{ card: PixCard; fromStageId: string } | null>(null);
   const [draggingId, setDraggingId] = useState<string | number | null>(null);
-  const [moverModal, setMoverModal] = useState<{ card: PixCard; toStageId: string; toStageNome: string } | null>(null);
+  const [moverModal, setMoverModal] = useState<{ card: PixCard; modo: 'mover' | 'comentar'; toStageId?: string; toStageNome?: string } | null>(null);
   const [movendo, setMovendo] = useState(false);
 
   const onDragStartCard = useCallback((card: PixCard, fromStageId: string) => {
@@ -542,14 +736,44 @@ export function PixPage() {
     setDraggingId(null);
     if (!drag || drag.fromStageId === toStageId) return;
     const nome = data?.stages.find((s) => s.id === toStageId)?.nome ?? toStageId;
-    setMoverModal({ card: drag.card, toStageId, toStageNome: nome });
+    setMoverModal({ card: drag.card, modo: 'mover', toStageId, toStageNome: nome });
   }, [data]);
+
+  // anexar foto / comentar direto no card (SEM mover de etapa)
+  const onComentarCard = useCallback((card: PixCard) => {
+    setMoverModal({ card, modo: 'comentar' });
+  }, []);
+
+  // clique no card → modal com os títulos em aberto relacionados ao nome
+  const [titulosModal, setTitulosModal] = useState<{ card: PixCard; data?: PixTitulosRelacionados; erro?: string } | null>(null);
+  const [refinandoIA, setRefinandoIA] = useState(false);
+  const [refineErro, setRefineErro] = useState<string | null>(null);
+  const abrirTitulos = useCallback((card: PixCard) => {
+    setRefinandoIA(false);
+    setRefineErro(null);
+    setTitulosModal({ card });
+    api.titulosRelacionadosPix(card.titulo_card || card.nome || '')
+      .then((d) => setTitulosModal((cur) => (cur && cur.card.id === card.id ? { card, data: d } : cur)))
+      .catch((e) => setTitulosModal((cur) => (cur && cur.card.id === card.id ? { card, erro: e.message } : cur)));
+  }, []);
+  // refina com IA mantendo os resultados da heurística visíveis até voltar
+  const refinarTitulosIA = useCallback((card: PixCard) => {
+    setRefinandoIA(true);
+    setRefineErro(null);
+    api.titulosRelacionadosPix(card.titulo_card || card.nome || '', { ia: true })
+      .then((d) => setTitulosModal((cur) => (cur && cur.card.id === card.id ? { card, data: d } : cur)))
+      .catch((e) => setRefineErro(e.message))
+      .finally(() => setRefinandoIA(false));
+  }, []);
 
   const confirmarMover = useCallback((comentario: string, anexos: { nome: string; base64: string }[]) => {
     if (!moverModal) return;
     setMovendo(true);
-    api.moverCardPix(moverModal.card.id, moverModal.toStageId, comentario || undefined, anexos.length ? anexos : undefined)
-      .then(() => { setMoverModal(null); load(true); })
+    const acao = moverModal.modo === 'mover'
+      ? api.moverCardPix(moverModal.card.id, moverModal.toStageId!, comentario || undefined, anexos.length ? anexos : undefined)
+      : api.comentarCardPix(moverModal.card.id, comentario || undefined, anexos.length ? anexos : undefined);
+    acao
+      .then(() => { const eraMover = moverModal.modo === 'mover'; setMoverModal(null); if (eraMover) load(true); })
       .catch((e) => setError(e.message))
       .finally(() => setMovendo(false));
   }, [moverModal, load]);
@@ -684,6 +908,8 @@ export function PixPage() {
                   onDragStartCard={onDragStartCard}
                   onDragEndCard={onDragEndCard}
                   draggingId={draggingId}
+                  onComentar={onComentarCard}
+                  onAbrir={abrirTitulos}
                 />
               ))}
             </div>
@@ -705,6 +931,16 @@ export function PixPage() {
           movendo={movendo}
           onClose={() => setMoverModal(null)}
           onConfirmar={confirmarMover}
+        />
+      )}
+
+      {titulosModal && (
+        <TitulosModal
+          estado={titulosModal}
+          onClose={() => setTitulosModal(null)}
+          onRefinar={() => refinarTitulosIA(titulosModal.card)}
+          refinando={refinandoIA}
+          refineErro={refineErro}
         />
       )}
     </div>

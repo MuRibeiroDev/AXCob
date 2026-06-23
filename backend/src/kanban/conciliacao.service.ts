@@ -29,6 +29,28 @@ export interface ConciliacaoResultado {
   criado_em?: string; cacheado?: boolean;
 }
 
+// ---------- títulos relacionados (explorar por nome) ----------
+export interface TituloRel {
+  documento: string; tipo: string | null; sistema: string | null; situacao: string | null;
+  sacado: string | null; cpf_cnpj_sacado: string | null;
+  cedente: string | null; cpf_cnpj_cedente: string | null;
+  vencimento: string | null; valor: number | null; total: number | null;
+}
+export interface GrupoSacado {
+  sacado: string | null; cpf_cnpj_sacado: string | null;
+  cedente: string | null; cpf_cnpj_cedente: string | null;
+  sim: number; qtd: number; totalValor: number; totalTotal: number;
+  titulos: TituloRel[];
+}
+export interface LadoRel {
+  grupos: GrupoSacado[]; qtdSacados: number; qtdTitulos: number;
+  totalValor: number; totalTotal: number;
+}
+export interface TitulosRelacionados {
+  nome: string; comoSacado: LadoRel; comoCedente: LadoRel;
+  truncado: boolean; modo: 'heuristica' | 'ia';
+}
+
 // ---------- helpers de texto/valor ----------
 const STOP = new Set([
   'LTDA', 'LTD', 'SA', 'S', 'A', 'ME', 'MEI', 'EPP', 'EIRELI', 'EI', 'CIA',
@@ -41,6 +63,10 @@ function norm(s: unknown): string {
 }
 const tokens = (s: unknown) => norm(s).split(' ').filter((t) => t.length >= 2);
 const tokensSignif = (s: unknown) => tokens(s).filter((t) => !STOP.has(t) && t.length >= 3);
+// como tokensSignif, mas MANTÉM tokens curtos (>=2) tipo "PX"/"JM" — costumam ser o
+// termo DISTINTIVO da razão social — descartando só os stopwords. Usado na exploração
+// por nome (títulos relacionados), onde o idf neutraliza os termos genéricos.
+const tokensRel = (s: unknown) => tokens(s).filter((t) => !STOP.has(t));
 const soDigitos = (s: unknown) => String(s ?? '').replace(/\D+/g, '');
 function chaveDoc(s: unknown): string { const d = soDigitos(s); return d.length >= 14 ? d.slice(0, 8) : d; }
 function simNome(pixToks: string[], alvo: unknown): number {
@@ -165,6 +191,188 @@ export class ConciliacaoService {
   /** Todos os resultados salvos (para a tela carregar de uma vez). */
   salvas(): Promise<ConciliacaoSalva[]> {
     return this.store().todos();
+  }
+
+  /** Explora o nome do card na base de títulos em aberto, casando pelo nome contra
+   *  AS DUAS colunas (sacado E cedente). Devolve dois lados:
+   *  - comoSacado: títulos em que o nome é o SACADO (1 grupo, normalmente);
+   *  - comoCedente: títulos em que o nome é o CEDENTE, agrupados por SACADO
+   *    (lista os sacados daquele cedente e os títulos de cada um).
+   *  Cada título aparece UMA vez (dedup por DOCUMENTO, mantendo o de maior TOTAL).
+   *
+   *  Por padrão usa heurística PONDERADA POR RARIDADE: termos do nome que aparecem
+   *  em muitos candidatos (ex.: "PNEUS") pesam pouco; o que identifica é o termo raro
+   *  (ex.: "VISA"). Com `opts.ia`, manda as razões sociais candidatas pro LLM
+   *  escolher quais são a MESMA entidade do pagador (robusto a grafia/abreviação). */
+  async titulosRelacionados(termo: string, opts: { ia?: boolean } = {}): Promise<TitulosRelacionados> {
+    const nome = parseCard(termo).nome || termo.trim();
+    const pixToks = [...new Set(tokensRel(nome))];
+    const vazio = (): LadoRel => ({ grupos: [], qtdSacados: 0, qtdTitulos: 0, totalValor: 0, totalTotal: 0 });
+    const semNada = (modo: 'heuristica' | 'ia'): TitulosRelacionados =>
+      ({ nome, comoSacado: vazio(), comoCedente: vazio(), truncado: false, modo });
+    if (!pixToks.length) return semNada(opts.ia ? 'ia' : 'heuristica');
+
+    const LIMITE = 2000;
+    const bruto = await this.buscarPorNomeAmbos(pixToks, LIMITE);
+
+    // dedup por DOCUMENTO (a view tem 1 linha por encargo) — fica o de maior TOTAL
+    const porDoc = new Map<string, TituloRow>();
+    for (const r of bruto) {
+      const k = String(r.DOCUMENTO);
+      const cur = porDoc.get(k);
+      if (!cur || (Number(r.TOTAL) || 0) > (Number(cur.TOTAL) || 0)) porDoc.set(k, r);
+    }
+    const rows = [...porDoc.values()];
+
+    const sac: { r: TituloRow; sim: number }[] = [];
+    const ced: { r: TituloRow; sim: number }[] = [];
+
+    if (opts.ia) {
+      // ----- modo IA: o LLM seleciona as entidades que são o mesmo pagador -----
+      const sel = await this.selecionarEntidadesIA(nome, rows);
+      const keySac = (r: TituloRow) => soDigitos(r.CPF_CNPJ_SACADO) || norm(r.SACADO);
+      const keyCed = (r: TituloRow) => soDigitos(r.CPF_CNPJ_CEDENTE) || norm(r.CEDENTE);
+      for (const r of rows) {
+        if (sel.has(keySac(r))) sac.push({ r, sim: 1 });
+        if (sel.has(keyCed(r))) ced.push({ r, sim: 1 });
+      }
+      this.logger.log(`pix relacionados (IA) "${nome}": ${sel.size} entidades, ${sac.length} como sacado, ${ced.length} como cedente`);
+    } else {
+      // ----- heurística ponderada por raridade (idf) sobre o pool de candidatos -----
+      const tokRows = rows.map((r) => ({ r, sac: new Set(tokensRel(r.SACADO)), ced: new Set(tokensRel(r.CEDENTE)) }));
+      const N = tokRows.length;
+      const df = new Map<string, number>();
+      for (const t of pixToks) {
+        let c = 0;
+        for (const x of tokRows) if (x.sac.has(t) || x.ced.has(t)) c++;
+        df.set(t, c);
+      }
+      // idf suavizado: termo presente em ~todos pesa quase 0; termo raro domina
+      const idf = (t: string) => Math.log((N + 1) / ((df.get(t) ?? 0) + 1)) + 0.1;
+      const totalIdf = pixToks.reduce((s, t) => s + idf(t), 0) || 1;
+      const simW = (toks: Set<string>) => pixToks.reduce((s, t) => s + (toks.has(t) ? idf(t) : 0), 0) / totalIdf;
+
+      const MIN = 0.6; // exige cobrir o(s) termo(s) DISTINTIVO(s) do nome, não só um genérico
+      for (const x of tokRows) {
+        const sSac = simW(x.sac);
+        const sCed = simW(x.ced);
+        if (sSac >= MIN && sSac >= sCed) sac.push({ r: x.r, sim: +sSac.toFixed(3) });
+        else if (sCed >= MIN && sCed > sSac) ced.push({ r: x.r, sim: +sCed.toFixed(3) });
+      }
+      this.logger.log(`pix relacionados "${nome}": ${sac.length} como sacado, ${ced.length} como cedente (de ${N} candidatos)`);
+    }
+
+    return {
+      nome,
+      comoSacado: this.agruparPorSacado(sac),
+      comoCedente: this.agruparPorSacado(ced),
+      truncado: bruto.length >= LIMITE,
+      modo: opts.ia ? 'ia' : 'heuristica',
+    };
+  }
+
+  /** Pergunta ao LLM quais das razões sociais candidatas são A MESMA entidade do
+   *  nome do pagador (admite grafia/abreviação; rejeita só-palavras-genéricas).
+   *  Devolve o conjunto de chaves (CNPJ/CPF ou nome normalizado) selecionadas. */
+  private async selecionarEntidadesIA(nome: string, rows: TituloRow[]): Promise<Set<string>> {
+    const apiKey = (this.config.get<string>('OPENAI_API_KEY') ?? '').trim();
+    if (!apiKey) throw new Error('OPENAI_API_KEY não configurada no .env');
+    const model = (this.config.get<string>('COBRANCA_LLM_MODEL') ?? 'gpt-4o-mini').trim();
+
+    const ents = new Map<string, { key: string; nome: string }>();
+    const add = (n: string | null, doc: string | null) => {
+      if (!n) return;
+      const key = soDigitos(doc) || norm(n);
+      if (key && !ents.has(key)) ents.set(key, { key, nome: n });
+    };
+    for (const r of rows) { add(r.SACADO, r.CPF_CNPJ_SACADO); add(r.CEDENTE, r.CPF_CNPJ_CEDENTE); }
+    const lista = [...ents.values()].slice(0, 250);
+    if (!lista.length) return new Set();
+
+    const system = `Você recebe o NOME de um pagador (de um PIX) e uma lista de RAZÕES SOCIAIS (empresas/pessoas). Selecione APENAS as que são A MESMA entidade do pagador, admitindo diferenças de grafia, abreviações, sufixos societários (LTDA, ME, EPP, EIRELI, S/A, CIA) e ordem das palavras. NÃO selecione empresas que apenas COMPARTILHAM palavras genéricas do ramo (ex.: "PNEUS", "COMERCIO", "AUTO", "VEICULOS") mas têm núcleo de nome diferente — "PNEUS VISA" é diferente de "RENAP PNEUS" e de "KIRST COMERCIO DE PNEUS". Na dúvida, NÃO selecione. Responda JSON puro: {"ids": [<índices selecionados>]}.`;
+    const payload = { nome_pagador: nome, empresas: lista.map((e, i) => ({ id: i, razao: e.nome })) };
+    const out = await this.chatJson(apiKey, model, system, payload);
+    const ids: unknown[] = Array.isArray(out?.ids) ? out.ids : [];
+    const sel = new Set<string>();
+    for (const i of ids) { const e = lista[Number(i)]; if (e) sel.add(e.key); }
+    return sel;
+  }
+
+  /** Chamada genérica ao chat da OpenAI com resposta em JSON. */
+  private async chatJson(apiKey: string, model: string, system: string, user: unknown): Promise<any> {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model, temperature: 0, seed: SEED, response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(user) }],
+      }),
+    });
+    if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const data = await res.json();
+    try { return JSON.parse(data?.choices?.[0]?.message?.content ?? '{}'); } catch { return {}; }
+  }
+
+  /** Busca em vw_titulos_abertos os títulos cujo SACADO OU CEDENTE contenha algum
+   *  dos tokens do nome (até os 4 mais longos, p/ recall sem explodir a query). */
+  private async buscarPorNomeAmbos(toks: string[], limite: number): Promise<TituloRow[]> {
+    const cols = `ID_TITULO, DOCUMENTO, TIPO, CPF_CNPJ_SACADO, SACADO, CPF_CNPJ_CEDENTE,
+      CEDENTE, DATA_EMISSAO, VENCIMENTO, SITUACAO, VALOR, MULTA, JUROS, TARIFAS, TOTAL, SISTEMA`;
+    const top = [...toks].sort((a, b) => b.length - a.length).slice(0, 4);
+    const params: Record<string, unknown> = {};
+    const conds = top.map((tok, i) => {
+      params[`t${i}`] = `%${tok}%`;
+      return `UPPER(SACADO) LIKE @t${i} OR UPPER(CEDENTE) LIKE @t${i}`;
+    });
+    const where = conds.map((c) => `(${c})`).join(' OR ');
+    return this.db.query<TituloRow>(`SELECT TOP ${limite} ${cols} FROM data_core.vw_titulos_abertos WHERE ${where}`, params);
+  }
+
+  /** Agrupa títulos por SACADO (CNPJ/CPF, ou nome quando falta documento). */
+  private agruparPorSacado(itens: { r: TituloRow; sim: number }[]): LadoRel {
+    const m = new Map<string, GrupoSacado>();
+    for (const { r, sim } of itens) {
+      const k = soDigitos(r.CPF_CNPJ_SACADO) || norm(r.SACADO) || '?';
+      let g = m.get(k);
+      if (!g) {
+        g = {
+          sacado: r.SACADO, cpf_cnpj_sacado: r.CPF_CNPJ_SACADO,
+          cedente: r.CEDENTE, cpf_cnpj_cedente: r.CPF_CNPJ_CEDENTE,
+          sim, qtd: 0, totalValor: 0, totalTotal: 0, titulos: [],
+        };
+        m.set(k, g);
+      }
+      g.sim = Math.max(g.sim, sim);
+      g.titulos.push(this.toRel(r));
+      g.qtd += 1;
+      g.totalValor += Number(r.VALOR) || 0;
+      g.totalTotal += Number(r.TOTAL) || 0;
+    }
+    const grupos = [...m.values()];
+    for (const g of grupos) {
+      g.titulos.sort((a, b) => (a.vencimento ?? '').localeCompare(b.vencimento ?? ''));
+      g.totalValor = +g.totalValor.toFixed(2);
+      g.totalTotal = +g.totalTotal.toFixed(2);
+    }
+    grupos.sort((a, b) => b.sim - a.sim || b.qtd - a.qtd);
+    return {
+      grupos,
+      qtdSacados: grupos.length,
+      qtdTitulos: grupos.reduce((s, g) => s + g.qtd, 0),
+      totalValor: +grupos.reduce((s, g) => s + g.totalValor, 0).toFixed(2),
+      totalTotal: +grupos.reduce((s, g) => s + g.totalTotal, 0).toFixed(2),
+    };
+  }
+
+  private toRel(c: TituloRow): TituloRel {
+    return {
+      documento: c.DOCUMENTO, tipo: c.TIPO, sistema: c.SISTEMA, situacao: c.SITUACAO,
+      sacado: c.SACADO, cpf_cnpj_sacado: c.CPF_CNPJ_SACADO,
+      cedente: c.CEDENTE, cpf_cnpj_cedente: c.CPF_CNPJ_CEDENTE,
+      vencimento: c.VENCIMENTO ? new Date(c.VENCIMENTO).toISOString().slice(0, 10) : null,
+      valor: c.VALOR != null ? Number(c.VALOR) : null,
+      total: c.TOTAL != null ? Number(c.TOTAL) : null,
+    };
   }
 
   /** Concilia um PIX. Serve do cache (por cardId) salvo; só rechama a IA se

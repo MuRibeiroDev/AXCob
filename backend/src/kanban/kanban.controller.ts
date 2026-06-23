@@ -50,6 +50,16 @@ export class KanbanController {
     return this.conciliacao.salvas();
   }
 
+  /** Explora o nome do card na base de títulos em aberto: devolve os títulos em
+   *  que o nome é sacado e os títulos em que é cedente (agrupados por sacado). */
+  @Post('pix/titulos-relacionados')
+  titulosRelacionados(@Body() body: { titulo?: string; ia?: boolean }) {
+    if (!body?.titulo?.trim()) {
+      throw new BadRequestException('titulo é obrigatório.');
+    }
+    return this.conciliacao.titulosRelacionados(body.titulo.trim(), { ia: body.ia === true });
+  }
+
   /** Lazy load de uma etapa de PIX: 1 página de cards a partir de `start`. */
   @Get('pix/stage/:stageId')
   pixStage(@Param('stageId') stageId: string, @Query('start') start?: string) {
@@ -107,5 +117,26 @@ export class KanbanController {
     const userId = Number(req.user?.sub ?? req.user?.id);
     const webhook = Number.isFinite(userId) ? await this.cfg.webhookDoUsuario(userId) : null;
     return this.service.moverCardPix(body.cardId, body.stageId, body.comentario, anexos, webhook);
+  }
+
+  /** Adiciona comentário + anexos (fotos) no timeline de um card de PIX, SEM mover
+   *  de etapa. Usa o webhook do usuário logado (sai no nome dele). */
+  @Post('pix/comentar')
+  async comentarPix(
+    @Req() req: any,
+    @Body() body: { cardId?: number | string; comentario?: string; anexos?: { nome: string; base64: string }[] },
+  ) {
+    if (!body?.cardId) {
+      throw new BadRequestException('cardId é obrigatório.');
+    }
+    const anexos = (body.anexos ?? [])
+      .filter((a) => a && a.nome && a.base64)
+      .map((a) => ({ nome: String(a.nome), base64: String(a.base64) }));
+    if (!body.comentario?.trim() && !anexos.length) {
+      throw new BadRequestException('comentário ou anexo é obrigatório.');
+    }
+    const userId = Number(req.user?.sub ?? req.user?.id);
+    const webhook = Number.isFinite(userId) ? await this.cfg.webhookDoUsuario(userId) : null;
+    return this.service.comentarCardPix(body.cardId, body.comentario, anexos, webhook);
   }
 }

@@ -1,17 +1,16 @@
-"""Fluxo do relatório TÍTULOS ABERTOS (report d81022c743c5a5ca976f).
+"""Fluxo do relatório TÍTULOS ABERTOS (report e8c4f016…, página 85d0180a…).
 
-Passos:
+A página nova é de TELA ÚNICA (todos os filtros já visíveis, sem navegação por
+botão-imagem nem painel de funil). Mesma REGRA de negócio da versão antiga:
   1) abre o link
-  2) TELA 1: período = ÚLTIMO DIA ÚTIL anterior nas DUAS partes (início e término)
-  3) clica no botão-imagem (~21.9 x 21.0)  -> vai p/ a outra tela
-  4) TELA 2: a outra data também = ÚLTIMO DIA ÚTIL nas duas partes
-  5) clica no botão de filtro (~15.3 x 17.1)
-  6) Tipo de Título: marca TODOS menos ADC, CHQ, DES
-  7) Tipo de Boleto = C
-  8) (HEADED) pausa p/ inspeção
+  2) período = ÚLTIMO DIA ÚTIL anterior (slicer de data único)
+  3) Categoria/Plataforma (AGRO/INDÚSTRIA/ESTRUTURADA ou Todos)
+  4) Tipo de Título: marca TODOS menos ADC, CHQ, DES
+  5) Tipo de Boleto = C
+  6) ordena por VALOR ABERTO (desc) e captura a tabela inteira
 
 Reusa helpers de powerbi_quitados.py (login/sessão, set de datas, combos).
-Rode HEADED p/ assistir:  python -u scripts/powerbi_abertos.py
+Rode HEADED p/ assistir:  ABERTOS_HEADED=1 python -u scripts/powerbi_abertos.py
 """
 from __future__ import annotations
 import asyncio
@@ -24,7 +23,7 @@ from playwright.async_api import async_playwright
 import powerbi_quitados as q
 
 URL = ("https://app.powerbi.com/groups/3a380369-2411-47f7-9c7f-d5fa51d75cac/"
-       "reports/e8c4f016-f8d3-445c-a333-b93a06d6b119/d81022c743c5a5ca976f"
+       "reports/e8c4f016-f8d3-445c-a333-b93a06d6b119/85d0180a26a3b16b5a5b"
        "?language=pt-BR&experience=power-bi&navContentPaneEnabled=false&filterPaneEnabled=false")
 
 HEADED = os.environ.get("ABERTOS_HEADED", "0") == "1"   # 1 = janela aberta p/ assistir
@@ -44,13 +43,26 @@ async def set_all_date_ranges(page, inicio, fim, label):
         inputs = rng.locator("input.date-slicer-datepicker")
         if await inputs.count() < 2:
             print(f"   [{label}] #{i} sem 2 inputs (pulando)"); continue
-        await q.set_date_input(page, inputs.nth(0), inicio)
+        # O slicer LIMITA o início ao valor do término (e vice-versa). Se setarmos
+        # o início primeiro, ele trava no término ANTIGO (menor). Por isso seta o
+        # TÉRMINO primeiro (alarga a janela) e só então o início; depois revalida
+        # cada campo até bater no alvo (resolve o clamp em ambos os sentidos).
         await q.set_date_input(page, inputs.nth(1), fim)
-        try:
-            iv, fv = await inputs.nth(0).input_value(), await inputs.nth(1).input_value()
-            print(f"   [{label}] #{i}: {iv!r}..{fv!r} (alvo {inicio}..{fim})")
-        except Exception:
-            pass
+        await q.set_date_input(page, inputs.nth(0), inicio)
+        iv = fv = "?"
+        for _ in range(3):
+            try:
+                iv, fv = await inputs.nth(0).input_value(), await inputs.nth(1).input_value()
+            except Exception:
+                break
+            if iv == inicio and fv == fim:
+                break
+            if fv != fim:
+                await q.set_date_input(page, inputs.nth(1), fim)
+            if iv != inicio:
+                await q.set_date_input(page, inputs.nth(0), inicio)
+        flag = "" if (iv == inicio and fv == fim) else "  <-- NÃO bateu o alvo!"
+        print(f"   [{label}] #{i}: {iv!r}..{fv!r} (alvo {inicio}..{fim}){flag}")
     await asyncio.sleep(1.2)
     return n
 
@@ -287,21 +299,10 @@ async def main(categoria: str = "", out_path: Path | None = None, dump_cedentes:
         await q.save_session(ctx)  # persiste a sessão (renovada) p/ as próximas execuções
         lap("load")
 
-        print("-> TELA 1: período = último dia útil (todas as datas da tela)")
+        # Tela única: todos os filtros já estão visíveis (sem navegação/funil).
+        print("-> período = último dia útil (slicer de data único)")
         await set_all_date_ranges(page, di, df, "período")
-        lap("tela1 datas")
-
-        print("-> clique no botão-imagem (~21.9 x 21.0)")
-        await click_image_size(page, "btn1", 21.9, 21.0)
-        lap("btn1")
-
-        print("-> TELA 2: preencher a 2ª data também = último dia útil (todas as datas)")
-        await set_all_date_ranges(page, di, df, "data2")
-        lap("tela2 datas")
-
-        print("-> abrir painel de filtros (botão funil ~15.3 x 17.1)")
-        await click_image_size(page, "abrir-filtros", 15.3, 17.1)
-        lap("abrir filtros")
+        lap("datas")
 
         print(f"-> Categoria/Plataforma → {categoria or 'Todos'}")
         await set_categorias(page, categoria)
@@ -314,17 +315,6 @@ async def main(categoria: str = "", out_path: Path | None = None, dump_cedentes:
         print("-> Tipo de Boleto = C")
         await q.ensure_tipo_boleto_c(page)
         lap("tipo boleto")
-
-        print("-> fechar painel de filtros (funil de novo) p/ sumir os filtros")
-        await click_image_size(page, "fechar-filtros", 15.3, 17.1)
-        await asyncio.sleep(1)   # capturar_limpo ainda faz HIDE_JS + settle
-        lap("fechar filtros")
-
-        # Revalida as datas no último dia útil (selecionar Plataforma/Tipo reseta
-        # o início do 2º slicer de período). NÃO mexe na Categoria.
-        print("-> revalida datas (todas = último dia útil) antes do print")
-        await set_all_date_ranges(page, di, df, "revalida")
-        lap("revalida datas")
 
         print("-> ordenar tabela por VALOR ABERTO (desc)")
         await q.ordenar_desc(page, "VALOR ABERTO")

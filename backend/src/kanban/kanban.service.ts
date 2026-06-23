@@ -119,6 +119,20 @@ export class KanbanService {
     return { ok: true };
   }
 
+  /** Adiciona comentário + anexos (fotos) no timeline de um card de PIX SEM mover
+   *  de etapa. Não invalida o cache (a posição/dados do card não mudam). */
+  async comentarCardPix(
+    cardId: number | string,
+    comentario?: string,
+    anexos?: { nome: string; base64: string }[],
+    webhook?: string | null,
+  ) {
+    const ent = PIX_PIPELINE.entityTypeId;
+    await this.bitrix.adicionarComentario(cardId, (comentario ?? '').trim(), webhook, ent, anexos);
+    this.logger.log(`pix ${cardId} comentado${comentario?.trim() ? ' (+comentário)' : ''}${anexos?.length ? ` (+${anexos.length} anexo)` : ''}`);
+    return { ok: true };
+  }
+
   /** Enriquece cards (nome de quem abriu + classificação SQL quitado/parcial/aberto)
    *  no shape de saída do board. Reusado pelo build (1ª página) e pelo lazy load. */
   private async enriquecerCards(cards: NormalizedCard[]): Promise<any[]> {

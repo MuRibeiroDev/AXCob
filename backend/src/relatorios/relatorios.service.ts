@@ -13,38 +13,38 @@ import { RelatorioStore } from './relatorio-store';
 // O nº de partes é adaptativo no script; descobrimos os arquivos por `outBase`_N.png.
 const PNG_JOBS: Record<string, { script: string; args: string[]; outBase: string }> = {
   titulos_quitados_geral: {
-    script: 'powerbi_quitados.py', args: [], outBase: 'print_quitados',
+    script: 'powerbi_quitados_expandido.py', args: ['--out', 'print_quitados.png'], outBase: 'print_quitados',
   },
   titulos_quitados_agro: {
-    script: 'powerbi_quitados.py',
+    script: 'powerbi_quitados_expandido.py',
     args: ['--categoria', 'AGRO', '--out', 'print_quitados_agro.png'],
     outBase: 'print_quitados_agro',
   },
   titulos_quitados_industria: {
-    script: 'powerbi_quitados.py',
+    script: 'powerbi_quitados_expandido.py',
     args: ['--categoria', 'INDUSTRIA', '--out', 'print_quitados_industria.png'],
     outBase: 'print_quitados_industria',
   },
   titulos_quitados_estruturada: {
-    script: 'powerbi_quitados.py',
+    script: 'powerbi_quitados_expandido.py',
     args: ['--categoria', 'ESTRUTURADA', '--out', 'print_quitados_estruturada.png'],
     outBase: 'print_quitados_estruturada',
   },
   titulos_abertos_geral: {
-    script: 'powerbi_abertos.py', args: ['--dump-cedentes'], outBase: 'print_abertos',
+    script: 'powerbi_abertos_expandido.py', args: ['--out', 'print_abertos.png', '--dump-cedentes'], outBase: 'print_abertos',
   },
   titulos_abertos_agro: {
-    script: 'powerbi_abertos.py',
+    script: 'powerbi_abertos_expandido.py',
     args: ['--categoria', 'AGRO', '--out', 'print_abertos_agro.png', '--dump-cedentes'],
     outBase: 'print_abertos_agro',
   },
   titulos_abertos_industria: {
-    script: 'powerbi_abertos.py',
+    script: 'powerbi_abertos_expandido.py',
     args: ['--categoria', 'INDUSTRIA', '--out', 'print_abertos_industria.png', '--dump-cedentes'],
     outBase: 'print_abertos_industria',
   },
   titulos_abertos_estruturada: {
-    script: 'powerbi_abertos.py',
+    script: 'powerbi_abertos_expandido.py',
     args: ['--categoria', 'ESTRUTURADA', '--out', 'print_abertos_estruturada.png', '--dump-cedentes'],
     outBase: 'print_abertos_estruturada',
   },
